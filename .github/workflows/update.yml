@@ -1,0 +1,33 @@
+name: Aggiorna ranking
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Costruisci il ranking (EDGAR + Yahoo Finance)
+        run: python scripts/build_ranking.py
+
+      - name: Commit e push dei dati aggiornati
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Aggiornamento automatico ranking"
+          file_pattern: 'data/*.csv data/*.json'
