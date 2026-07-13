@@ -2,12 +2,11 @@ name: Aggiorna ranking
 
 on:
   schedule:
-    # Ogni lunedi alle 06:00 UTC (07:00 in Italia, 10:00 a Dubai)
     - cron: '0 6 * * 1'
-  workflow_dispatch: {}   # bottone "Run workflow" per lanciarlo a mano quando vuoi
+  workflow_dispatch: {}
 
 permissions:
-  contents: write   # serve per fare il commit automatico dei dati aggiornati
+  contents: write
 
 jobs:
   build:
