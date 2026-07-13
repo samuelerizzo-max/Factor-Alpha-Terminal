@@ -12,14 +12,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FCTR">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png">
-<link rel="apple-touch-icon" sizes="167x167" href="icons/apple-touch-icon-167.png">
-<link rel="apple-touch-icon" sizes="152x152" href="icons/apple-touch-icon-152.png">
-<link rel="apple-touch-icon" sizes="120x120" href="icons/apple-touch-icon-120.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon-180.png">
+<link rel="apple-touch-icon" sizes="167x167" href="apple-touch-icon-167.png">
+<link rel="apple-touch-icon" sizes="152x152" href="apple-touch-icon-152.png">
+<link rel="apple-touch-icon" sizes="120x120" href="apple-touch-icon-120.png">
 
 <!-- Home screen su Android/Chrome -->
-<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
 
 <style>
   html, body {
@@ -510,19 +510,19 @@
     });
   });
 
-  // ---------- caricamento automatico dei dati live (data/ranking.csv) ----------
+  // ---------- caricamento automatico dei dati live (ranking.csv alla radice) ----------
   async function loadLiveData(){
     try {
-      const res = await fetch('data/ranking.csv', {cache:'no-store'});
-      if (!res.ok) throw new Error('data/ranking.csv non trovato (Action non ancora eseguita?)');
+      const res = await fetch('ranking.csv', {cache:'no-store'});
+      if (!res.ok) throw new Error('ranking.csv non trovato (Action non ancora eseguita?)');
       const text = await res.text();
       const parsed = Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true});
       const rows = parsed.data.map(mapRow).filter(r=>r.ticker);
-      if (!rows.length) throw new Error('data/ranking.csv vuoto o non valido');
+      if (!rows.length) throw new Error('ranking.csv vuoto o non valido');
 
       let stamp = "";
       try {
-        const mres = await fetch('data/meta.json', {cache:'no-store'});
+        const mres = await fetch('meta.json', {cache:'no-store'});
         if (mres.ok){
           const meta = await mres.json();
           if (meta.generated_at){
