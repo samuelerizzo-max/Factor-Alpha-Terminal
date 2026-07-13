@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-07-13T00:00:00Z",
-  "n_names": 20,
-  "universe": "S&P 500 ex-Financials/Real Estate (seed iniziale, Top 20)",
+  "generated_at": "2026-07-13T19:47:44.528131Z",
+  "n_names": 366,
+  "universe": "S&P 500 ex-Financials/Real Estate",
   "weights": {
     "value": 0.4,
     "quality": 0.4,
     "momentum": 0.2
   },
-  "source": "Sessione di ricerca manuale \u2014 sara' sostituito dal primo run automatico"
+  "source": "SEC EDGAR (TTM point-in-time) + Yahoo Finance"
 }
