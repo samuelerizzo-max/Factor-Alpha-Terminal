@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>FCTR&lt;GO&gt; — Factor Alpha Terminal</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0A0C0E">
+
+<!-- Home screen su iOS/iPadOS: apre a schermo intero, senza barra Safari -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FCTR">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png">
+<link rel="apple-touch-icon" sizes="167x167" href="icons/apple-touch-icon-167.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icons/apple-touch-icon-152.png">
+<link rel="apple-touch-icon" sizes="120x120" href="icons/apple-touch-icon-120.png">
+
+<!-- Home screen su Android/Chrome -->
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #06070A;
+    min-height: 100vh;
+  }
+  .fa-page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 18px 14px 60px;
+  }
+  @media (min-width: 900px) {
+    .fa-page { padding: 32px 24px 60px; }
+  }
+  @supports (padding: max(0px)) {
+    .fa-page {
+      padding-left: max(14px, env(safe-area-inset-left));
+      padding-right: max(14px, env(safe-area-inset-right));
+      padding-top: max(18px, env(safe-area-inset-top));
+    }
+  }
+</style>
+</head>
+<body>
+<div class="fa-page">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
+#fa-root {
+  --bg: #0A0C0E;
+  --panel: #12151A;
+  --panel2: #181C22;
+  --border: #262B31;
+  --border-soft: #1B1F24;
+  --text: #E9E7E2;
+  --text-dim: #82878E;
+  --text-mute: #4B4F55;
+  --amber: #F2A93B;
+  --amber-dim: #8A6423;
+  --cyan: #4DD8E6;
+  --violet: #B48CFF;
+  --green: #38D68E;
+  --red: #FF6B7A;
+
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+  min-height: 640px;
+}
+#fa-root * { box-sizing: border-box; }
+#fa-root .mono { font-family: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; }
+
+/* ---------- command bar signature ---------- */
+#fa-cmdbar {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  color: var(--amber);
+  letter-spacing: 0.5px;
+  min-height: 20px;
+}
+#fa-cmdbar .fa-cursor {
+  display: inline-block;
+  width: 7px; height: 14px;
+  background: var(--amber);
+  margin-left: 2px;
+  vertical-align: -2px;
+  animation: fa-blink 1s step-end infinite;
+}
+@keyframes fa-blink { 50% { opacity: 0; } }
+
+#fa-terminal {
+  opacity: 0;
+  transition: opacity 0.5s ease;
+  padding: 0 20px 20px;
+}
+#fa-terminal.fa-show { opacity: 1; }
+
+/* ---------- header ---------- */
+#fa-topbar {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px;
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.fa-brand-mark {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700; font-size: 22px; letter-spacing: 1px;
+  color: var(--text);
+}
+.fa-brand-sub {
+  font-size: 11px; color: var(--text-dim); letter-spacing: 1.5px;
+  text-transform: uppercase; margin-top: 2px;
+}
+.fa-meta-strip {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-dim);
+}
+.fa-meta-strip b { color: var(--text); font-weight: 600; }
+
+/* ---------- tabs ---------- */
+#fa-tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.fa-tab {
+  background: none; border: 1px solid var(--border);
+  color: var(--text-dim); font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px; letter-spacing: 1px; padding: 7px 16px;
+  border-radius: 6px; cursor: pointer; transition: all 0.15s;
+}
+.fa-tab:hover { color: var(--text); border-color: var(--text-mute); }
+.fa-tab.fa-active { background: var(--amber); color: #1A1305; border-color: var(--amber); font-weight: 600; }
+
+.fa-panel { display: none; }
+.fa-panel.fa-active { display: block; }
+
+/* ---------- controls ---------- */
+#fa-controls {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px;
+}
+#fa-controls input[type=text], #fa-controls select {
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  padding: 8px 12px; border-radius: 6px; outline: none;
+}
+#fa-controls input[type=text] { width: 160px; }
+#fa-controls input[type=text]:focus, #fa-controls select:focus { border-color: var(--amber); }
+.fa-upload-btn {
+  background: var(--panel2); border: 1px dashed var(--text-mute); color: var(--text-dim);
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+  padding: 8px 14px; border-radius: 6px; cursor: pointer; transition: all 0.15s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.fa-upload-btn:hover { border-color: var(--amber); color: var(--amber); }
+#fa-source-label {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-mute);
+  align-self: center; margin-left: auto;
+}
+
+/* ---------- sector mix ---------- */
+#fa-sectormix {
+  background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 14px;
+}
+.fa-sm-title {
+  font-size: 10px; letter-spacing: 1.5px; color: var(--text-mute); text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.fa-sm-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 11px; }
+.fa-sm-label { width: 150px; color: var(--text-dim); font-family: 'IBM Plex Mono', monospace; flex-shrink: 0; }
+.fa-sm-track { flex: 1; height: 6px; background: var(--border-soft); border-radius: 3px; overflow: hidden; }
+.fa-sm-fill { height: 100%; background: var(--amber); border-radius: 3px; }
+.fa-sm-count { width: 24px; text-align: right; color: var(--text-mute); font-family: 'IBM Plex Mono', monospace; }
+
+/* ---------- table ---------- */
+#fa-tablewrap { border: 1px solid var(--border-soft); border-radius: 8px; overflow: hidden; }
+.fa-row-grid {
+  display: grid;
+  grid-template-columns: 40px 64px 1fr 120px 90px 90px;
+  gap: 10px; align-items: center;
+}
+.fa-thead {
+  background: var(--panel2); padding: 9px 14px;
+  font-size: 10px; letter-spacing: 1px; color: var(--text-mute); text-transform: uppercase;
+  border-bottom: 1px solid var(--border-soft);
+}
+.fa-thead span { cursor: pointer; user-select: none; }
+.fa-thead span:hover { color: var(--text-dim); }
+.fa-thead span.fa-sorted { color: var(--amber); }
+.fa-tbody { max-height: 480px; overflow-y: auto; }
+.fa-trow {
+  padding: 10px 14px; border-bottom: 1px solid var(--border-soft);
+  cursor: pointer; transition: background 0.1s;
+}
+.fa-trow:hover { background: var(--panel); }
+.fa-trow:last-child { border-bottom: none; }
+.fa-rank { color: var(--text-mute); font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
+.fa-ticker { font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 13px; color: var(--text); }
+.fa-sector-pill {
+  display: inline-block; font-size: 10px; color: var(--text-dim);
+  background: var(--panel2); border: 1px solid var(--border-soft);
+  padding: 2px 8px; border-radius: 10px; margin-top: 3px;
+}
+.fa-divbar { position: relative; height: 14px; background: var(--border-soft); border-radius: 3px; overflow: hidden; }
+.fa-divbar .fa-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--text-mute); }
+.fa-divbar .fa-fill { position: absolute; top: 0; bottom: 0; }
+.fa-score-num { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; text-align: right; }
+.fa-mini-factors { display: flex; gap: 3px; align-items: flex-end; height: 20px; }
+.fa-mini-bar { width: 5px; border-radius: 1px; align-self: flex-end; }
+
+/* ---------- prezzo + 52W: cella compatta in riga ---------- */
+.fa-52w-track { position: relative; height: 4px; background: var(--border-soft); border-radius: 2px; margin-top: 5px; }
+.fa-52w-fill { position: absolute; top: -2px; width: 2px; height: 8px; background: var(--amber); border-radius: 1px; transform: translateX(-50%); }
+
+/* ---------- prezzo + 52W: blocco esteso nel dettaglio ---------- */
+.fa-range52-block { margin-bottom: 14px; }
+.fa-52w-track-lg { position: relative; height: 6px; background: var(--border-soft); border-radius: 3px; margin: 8px 0 6px; }
+.fa-52w-fill-lg { position: absolute; top: -3px; width: 3px; height: 12px; background: var(--amber); border-radius: 1.5px; transform: translateX(-50%); box-shadow: 0 0 0 3px rgba(242,169,59,0.15); }
+.fa-range52-labels { display: flex; justify-content: space-between; font-size: 12px; }
+.fa-range52-labels .fa-metric-label { margin-top: 1px; }
+
+/* ---------- expand detail ---------- */
+.fa-detail {
+  padding: 16px 14px 18px; background: var(--panel);
+  border-bottom: 1px solid var(--border-soft);
+  display: none;
+}
+.fa-detail.fa-open { display: block; }
+.fa-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.fa-factor-block { }
+.fa-factor-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 5px; display: flex; justify-content: space-between; }
+.fa-metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px 18px; }
+.fa-metric { }
+.fa-metric-label { font-size: 10px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.5px; }
+.fa-metric-val { font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 600; margin-top: 2px; }
+
+/* ---------- model tab ---------- */
+.fa-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.fa-card {
+  background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px; padding: 14px 16px;
+}
+.fa-card-label { font-size: 10px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+.fa-card-val { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 700; }
+.fa-card-sub { font-size: 11px; color: var(--text-dim); margin-top: 4px; font-family: 'IBM Plex Mono', monospace; }
+
+.fa-section-title {
+  font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim);
+  margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border-soft);
+}
+.fa-note { font-size: 13px; line-height: 1.6; color: var(--text-dim); }
+.fa-note b { color: var(--text); }
+
+.fa-callout {
+  background: linear-gradient(180deg, rgba(242,169,59,0.08), rgba(242,169,59,0.02));
+  border: 1px solid var(--amber-dim); border-radius: 8px; padding: 14px 16px; margin-top: 14px;
+  font-size: 12.5px; line-height: 1.6; color: var(--text);
+}
+.fa-callout .fa-callout-tag {
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--amber);
+  letter-spacing: 1px; margin-bottom: 6px; text-transform: uppercase;
+}
+
+.fa-heatgrid { display: grid; grid-template-columns: 70px repeat(3, 1fr); gap: 4px; max-width: 460px; }
+.fa-heatcell {
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px; text-align: center;
+  padding: 8px 4px; border-radius: 4px; color: #0A0C0E; font-weight: 600;
+}
+.fa-heatlabel { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-dim); display: flex; align-items: center; }
+.fa-heathead { font-size: 10px; color: var(--text-mute); text-align: center; padding-bottom: 2px; }
+
+.fa-contrib-row { display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--border-soft); }
+.fa-contrib-row:last-child { border-bottom: none; }
+
+@media (max-width: 640px) {
+  .fa-row-grid { grid-template-columns: 30px 56px 1fr 76px; }
+  .fa-col-hide-sm { display: none; }
+  #fa-source-label { margin-left: 0; }
+}
+</style>
+
+<div id="fa-root">
+  <div id="fa-cmdbar"><span class="mono" id="fa-cmd-text"></span><span class="fa-cursor"></span></div>
+
+  <div id="fa-terminal">
+    <header id="fa-topbar">
+      <div>
+        <div class="fa-brand-mark">FCTR&lt;GO&gt;</div>
+        <div class="fa-brand-sub">Factor Alpha · US Equity Screen · ex-Fin/REIT</div>
+      </div>
+      <div class="fa-meta-strip" id="fa-meta"></div>
+    </header>
+
+    <nav id="fa-tabs">
+      <button class="fa-tab fa-active" data-tab="screen">SCREEN</button>
+      <button class="fa-tab" data-tab="model">MODEL</button>
+    </nav>
+
+    <section class="fa-panel fa-active" id="fa-panel-screen">
+      <div id="fa-controls">
+        <input type="text" id="fa-search" placeholder="Cerca ticker…" />
+        <select id="fa-sector-filter"><option value="">Tutti i settori</option></select>
+        <label class="fa-upload-btn">
+          ⇪ Importa ranking.csv
+          <input type="file" id="fa-file-input" accept=".csv" hidden />
+        </label>
+        <span id="fa-source-label"></span>
+      </div>
+
+      <div id="fa-sectormix">
+        <div class="fa-sm-title">Mix settoriale — top 30 per score</div>
+        <div id="fa-sm-rows"></div>
+      </div>
+
+      <div id="fa-tablewrap">
+        <div class="fa-thead fa-row-grid">
+          <span class="mono" data-sort="rank">#</span>
+          <span class="mono" data-sort="ticker">Ticker</span>
+          <span data-sort="sector">Settore</span>
+          <span data-sort="score" style="text-align:right">Score</span>
+          <span class="fa-col-hide-sm" style="text-align:center">V · Q · M</span>
+          <span data-sort="price" class="fa-col-hide-sm" style="text-align:right">Prezzo · 52W</span>
+        </div>
+        <div class="fa-tbody" id="fa-tbody"></div>
+      </div>
+    </section>
+
+    <section class="fa-panel" id="fa-panel-model">
+      <div class="fa-cards">
+        <div class="fa-card">
+          <div class="fa-card-label">CAGR strategia</div>
+          <div class="fa-card-val" style="color:var(--green)">25.1%</div>
+          <div class="fa-card-sub">vs S&amp;P 16.0%</div>
+        </div>
+        <div class="fa-card">
+          <div class="fa-card-label">Sharpe</div>
+          <div class="fa-card-val">1.33</div>
+          <div class="fa-card-sub">vs S&amp;P 0.96</div>
+        </div>
+        <div class="fa-card">
+          <div class="fa-card-label">Max Drawdown</div>
+          <div class="fa-card-val" style="color:var(--red)">-20.6%</div>
+          <div class="fa-card-sub">vs S&amp;P -23.9%</div>
+        </div>
+        <div class="fa-card">
+          <div class="fa-card-label">Edge corretto</div>
+          <div class="fa-card-val" style="color:var(--amber)">+9.0%</div>
+          <div class="fa-card-sub">da +14.8% grezzo</div>
+        </div>
+      </div>
+
+      <div class="fa-note">
+        Backtest point-in-time 2019-03 → 2026-06 (29 trimestri) · <b>top 15</b> nomi equal-weight ·
+        ribilancio trimestrale · <b>10 bps</b> di costo per lato · fondamentali EDGAR gated sulla data
+        di deposito (10-K), niente look-ahead · pesi <b>value 40% / quality 40%</b> (+ momentum 20% nello
+        screener live) · z-score neutrali per settore.
+      </div>
+
+      <div class="fa-section-title">Scomposizione — il rendimento è diffuso o concentrato?</div>
+      <div class="fa-note" style="margin-bottom:10px;">
+        Top 5 contributori sui 29 trimestri: <b>NVDA</b> +4.0 · <b>SMCI</b> +2.7 · <b>KLAC</b> +2.0 ·
+        <b>AVGO</b> +1.9 · <b>URI</b> +1.8 — pari al <b>25%</b> dei contributi positivi totali.
+      </div>
+      <div class="fa-contrib-row"><span>CAGR con tutti i contributori</span><span style="color:var(--green)">30.9%</span></div>
+      <div class="fa-contrib-row"><span>CAGR <b style="color:var(--text)">senza</b> i top-5 contributori</span><span style="color:var(--green)">21.8%</span></div>
+      <div class="fa-contrib-row"><span>S&amp;P 500 (stesso periodo)</span><span style="color:var(--text-dim)">16.0%</span></div>
+
+      <div class="fa-section-title">Robustezza — CAGR al variare di N titoli e pesi value/quality</div>
+      <div class="fa-heatgrid" id="fa-heatgrid"></div>
+
+      <div class="fa-callout">
+        <div class="fa-callout-tag">⚠ Survivorship bias residuo</div>
+        Il backtest usa la composizione storica S&amp;P 500, ma copre solo <b>297 nomi/trimestre</b> in media
+        contro i circa 504 realmente esistenti — <b>~207 nomi rimossi</b> dall'indice nel tempo (sottoperformanti,
+        acquisiti, falliti) restano invisibili al modello perché i loro dati non sono nello store.
+        L'edge reale è quindi <b>probabilmente inferiore</b> al +9.0% mostrato sopra.
+        Trattare questo motore come <b>segnale di conferma</b> dentro il tuo processo — bear/base/bull,
+        discussione prima di eseguire — non come strategia automatica.
+      </div>
+    </section>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+(function(){
+  const root = document.getElementById('fa-root');
+
+  // ---------- demo dataset: real output from the v4 engine run ----------
+  const DEMO = [
+    {ticker:"EIX",rank:1,sector:"Utilities",score:1.0763,value_score:1.6561,quality_score:0.0158,momentum_score:2.04,earn_yield:0.1228,roic:0.0840,op_margin:0.3077},
+    {ticker:"FIX",rank:2,sector:"Industrials",score:1.0427,value_score:-0.8784,quality_score:1.9853,momentum_score:3.00,earn_yield:0.0198,roic:0.6000,op_margin:0.5630},
+    {ticker:"CF",rank:3,sector:"Materials",score:0.9816,value_score:1.2592,quality_score:1.1440,momentum_score:0.10,earn_yield:0.0905,roic:0.2627,op_margin:0.3656},
+    {ticker:"MU",rank:4,sector:"Information Technology",score:0.8871,value_score:-0.0002,quality_score:1.2088,momentum_score:2.02,earn_yield:0.0456,roic:0.5984,op_margin:0.6563},
+    {ticker:"LDOS",rank:5,sector:"Industrials",score:0.8457,value_score:2.5778,quality_score:0.0028,momentum_score:-0.93,earn_yield:0.1050,roic:0.2818,op_margin:0.1209},
+    {ticker:"BIIB",rank:6,sector:"Health Care",score:0.8006,value_score:0.9368,quality_score:0.4938,momentum_score:1.14,earn_yield:0.0467,roic:0.1152,op_margin:0.2493},
+    {ticker:"MO",rank:7,sector:"Consumer Staples",score:0.7637,value_score:0.6728,quality_score:0.8505,momentum_score:0.77,earn_yield:0.0672,roic:0.4723,op_margin:0.4720},
+    {ticker:"CTSH",rank:8,sector:"Information Technology",score:0.7483,value_score:2.6654,quality_score:-0.3634,momentum_score:-0.86,earn_yield:0.1105,roic:0.1509,op_margin:0.1579},
+    {ticker:"ADBE",rank:9,sector:"Information Technology",score:0.7469,value_score:1.2888,quality_score:1.0387,momentum_score:-0.92,earn_yield:0.0813,roic:0.6000,op_margin:0.3607},
+    {ticker:"ACN",rank:10,sector:"Information Technology",score:0.6540,value_score:2.2055,quality_score:-0.0952,momentum_score:-0.95,earn_yield:0.0904,roic:0.3635,op_margin:0.1449},
+    {ticker:"AOS",rank:11,sector:"Industrials",score:0.6515,value_score:1.7096,quality_score:0.2926,momentum_score:-0.75,earn_yield:0.1153,roic:0.2929,op_margin:0.1853},
+    {ticker:"DECK",rank:12,sector:"Consumer Discretionary",score:0.5878,value_score:0.6044,quality_score:0.8126,momentum_score:0.11,earn_yield:0.0696,roic:0.6000,op_margin:0.2308},
+    {ticker:"CMCSA",rank:13,sector:"Communication Services",score:0.5582,value_score:1.4973,quality_score:0.2395,momentum_score:-0.68,earn_yield:0.2500,roic:0.1861,op_margin:0.1529},
+    {ticker:"URI",rank:14,sector:"Industrials",score:0.5494,value_score:0.2670,quality_score:0.9161,momentum_score:0.38,earn_yield:0.0365,roic:0.1307,op_margin:1.0000},
+    {ticker:"SOLV",rank:15,sector:"Health Care",score:0.5280,value_score:1.0484,quality_score:0.3033,momentum_score:-0.06,earn_yield:0.1078,roic:0.1892,op_margin:0.2554},
+    {ticker:"KLAC",rank:16,sector:"Information Technology",score:0.5011,value_score:1.1927,quality_score:-0.2788,momentum_score:0.68,earn_yield:0.1544,roic:0.0552,op_margin:0.0482},
+    {ticker:"GM",rank:17,sector:"Consumer Discretionary",score:0.4975,value_score:1.1540,quality_score:-0.7885,momentum_score:1.76,earn_yield:0.0362,roic:0.0527,op_margin:0.0148},
+    {ticker:"EQT",rank:18,sector:"Energy",score:0.4935,value_score:1.9595,quality_score:0.1788,momentum_score:-1.81,earn_yield:0.1075,roic:0.1213,op_margin:1.0000},
+    {ticker:"LULU",rank:19,sector:"Consumer Discretionary",score:0.4810,value_score:1.7542,quality_score:0.3796,momentum_score:-1.86,earn_yield:0.1129,roic:0.3655,op_margin:0.1829},
+    {ticker:"NVDA",rank:20,sector:"Information Technology",score:0.4592,value_score:-0.3753,quality_score:1.7018,momentum_score:-0.36,earn_yield:0.0313,roic:0.6000,op_margin:1.0000},
+  ];
+
+  let data = DEMO.slice();
+  let sourceLabel = "Demo · Top 20 (in attesa dei dati live…)";
+  let sortKey = "rank", sortDir = 1;
+  let openTicker = null;
+
+  const NUMERIC_FIELDS = ["score","value_score","quality_score","momentum_score","earn_yield","fcf_yield","ebit_yield","roic","roe","op_margin","debt_eq","mom","price","high_52w","low_52w","mktcap","rank"];
+  const METRIC_META = {
+    earn_yield: {label:"Earnings Yield", fmt:pct},
+    fcf_yield: {label:"FCF Yield", fmt:pct},
+    ebit_yield: {label:"EBIT/EV Yield", fmt:pct},
+    roic: {label:"ROIC", fmt:pct},
+    roe: {label:"ROE", fmt:pct},
+    op_margin: {label:"Op. Margin", fmt:pct},
+    debt_eq: {label:"Debt / Equity", fmt:x=>x.toFixed(2)+"x"},
+    mom: {label:"Momentum 12-1", fmt:pct},
+    mktcap: {label:"Market Cap", fmt:moneyCompact},
+  };
+
+  function pct(x){ return (x>=0?"+":"") + (x*100).toFixed(1) + "%"; }
+  function money(x){ return "$" + x.toLocaleString("en-US",{maximumFractionDigits:2}); }
+  function moneyCompact(x){
+    if (x >= 1e12) return "$" + (x/1e12).toFixed(2) + "T";
+    if (x >= 1e9) return "$" + (x/1e9).toFixed(2) + "B";
+    if (x >= 1e6) return "$" + (x/1e6).toFixed(1) + "M";
+    return money(x);
+  }
+
+  // ---------- command bar typing animation ----------
+  const cmdEl = document.getElementById('fa-cmd-text');
+  const cmdFull = "ZSCR<GO>  running factor screen — value 40 · quality 40 · momentum 20 …";
+  let ci = 0;
+  function typeCmd(){
+    if (ci <= cmdFull.length){
+      cmdEl.textContent = cmdFull.slice(0, ci);
+      ci += 2;
+      setTimeout(typeCmd, 14);
+    } else {
+      setTimeout(()=>{ document.getElementById('fa-terminal').classList.add('fa-show'); }, 250);
+    }
+  }
+  typeCmd();
+
+  // ---------- tabs ----------
+  document.getElementById('fa-tabs').addEventListener('click', e=>{
+    const btn = e.target.closest('.fa-tab');
+    if (!btn) return;
+    document.querySelectorAll('.fa-tab').forEach(t=>t.classList.remove('fa-active'));
+    document.querySelectorAll('.fa-panel').forEach(p=>p.classList.remove('fa-active'));
+    btn.classList.add('fa-active');
+    document.getElementById('fa-panel-' + btn.dataset.tab).classList.add('fa-active');
+  });
+
+  // ---------- header sort ----------
+  document.querySelectorAll('.fa-thead [data-sort]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      const k = el.dataset.sort;
+      if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = (k==="ticker"||k==="sector")?1:-1; }
+      render();
+    });
+  });
+
+  // ---------- search + filter ----------
+  document.getElementById('fa-search').addEventListener('input', render);
+  document.getElementById('fa-sector-filter').addEventListener('change', render);
+
+  // ---------- mapping condiviso: riga CSV grezza -> oggetto dati ----------
+  function mapRow(r){
+    const o = { ticker: (r.ticker||r.Ticker||"").toString().toUpperCase(), sector: r.sector || "—" };
+    NUMERIC_FIELDS.forEach(f=>{
+      const v = r[f] ?? r[f.toUpperCase()];
+      if (v !== undefined && v !== null && v !== "" && !isNaN(v)) o[f] = +v;
+    });
+    if (o.score === undefined && r.SCORE !== undefined) o.score = +r.SCORE;
+    return o;
+  }
+
+  // ---------- csv import manuale (override) ----------
+  document.getElementById('fa-file-input').addEventListener('change', function(e){
+    const file = e.target.files[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true, dynamicTyping: true, skipEmptyLines: true,
+      complete: function(res){
+        const rows = res.data.map(mapRow).filter(r=>r.ticker);
+        if (rows.length){
+          data = rows;
+          sourceLabel = "Caricato manualmente · " + file.name + " · " + rows.length + " nomi";
+          sortKey = "rank"; sortDir = 1; openTicker = null;
+          populateSectorFilter();
+          render();
+        }
+      }
+    });
+  });
+
+  // ---------- caricamento automatico dei dati live (data/ranking.csv) ----------
+  async function loadLiveData(){
+    try {
+      const res = await fetch('data/ranking.csv', {cache:'no-store'});
+      if (!res.ok) throw new Error('data/ranking.csv non trovato (Action non ancora eseguita?)');
+      const text = await res.text();
+      const parsed = Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true});
+      const rows = parsed.data.map(mapRow).filter(r=>r.ticker);
+      if (!rows.length) throw new Error('data/ranking.csv vuoto o non valido');
+
+      let stamp = "";
+      try {
+        const mres = await fetch('data/meta.json', {cache:'no-store'});
+        if (mres.ok){
+          const meta = await mres.json();
+          if (meta.generated_at){
+            const dt = new Date(meta.generated_at);
+            stamp = " · aggiornato " + dt.toLocaleDateString('it-IT') + " " + dt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+          }
+        }
+      } catch(e){ /* meta opzionale, non blocca */ }
+
+      data = rows;
+      sourceLabel = "Live · " + rows.length + " nomi" + stamp;
+      sortKey = "rank"; sortDir = 1; openTicker = null;
+      populateSectorFilter();
+      render();
+    } catch(e){
+      console.warn("Dati live non disponibili, resto sul demo:", e.message);
+    }
+  }
+
+  function populateSectorFilter(){
+    const sel = document.getElementById('fa-sector-filter');
+    const cur = sel.value;
+    const sectors = [...new Set(data.map(d=>d.sector))].sort();
+    sel.innerHTML = '<option value="">Tutti i settori</option>' + sectors.map(s=>`<option value="${s}">${s}</option>`).join("");
+    if (sectors.includes(cur)) sel.value = cur;
+  }
+
+  // ---------- rendering ----------
+  function render(){
+    const q = document.getElementById('fa-search').value.trim().toUpperCase();
+    const sect = document.getElementById('fa-sector-filter').value;
+    let rows = data.filter(d=>{
+      if (q && !d.ticker.includes(q)) return false;
+      if (sect && d.sector !== sect) return false;
+      return true;
+    });
+    rows.sort((a,b)=>{
+      let av = a[sortKey], bv = b[sortKey];
+      if (typeof av === "string") { av = av||""; bv = bv||""; return sortDir * av.localeCompare(bv); }
+      av = av ?? -Infinity; bv = bv ?? -Infinity;
+      return sortDir * (av - bv);
+    });
+
+    document.querySelectorAll('.fa-thead [data-sort]').forEach(el=>{
+      el.classList.toggle('fa-sorted', el.dataset.sort === sortKey);
+    });
+
+    const scoreVals = data.map(d=>d.score).filter(v=>v!==undefined);
+    const scoreMax = Math.max(1, ...scoreVals.map(Math.abs));
+
+    const tbody = document.getElementById('fa-tbody');
+    tbody.innerHTML = rows.map(d=>rowHtml(d, scoreMax)).join("");
+
+    document.getElementById('fa-meta').innerHTML =
+      `<span><b>${data.length}</b> nomi</span><span>W: value <b>40</b> · quality <b>40</b> · momentum <b>20</b></span><span>ex-Financials · ex-Real Estate</span>`;
+    document.getElementById('fa-source-label').textContent = sourceLabel;
+
+    renderSectorMix();
+  }
+
+  function divergingBar(val, max, color, height){
+    max = max || 3;
+    const clamped = Math.max(-max, Math.min(max, val || 0));
+    const pctPos = 50 + (clamped/max)*50;
+    const left = clamped >= 0 ? 50 : pctPos;
+    const width = Math.abs(pctPos - 50);
+    return `<div class="fa-divbar" style="height:${height||14}px">
+      <div class="fa-tick" style="left:50%"></div>
+      <div class="fa-fill" style="left:${left}%; width:${width}%; background:${color}"></div>
+    </div>`;
+  }
+
+  function rowHtml(d, scoreMax){
+    const isOpen = openTicker === d.ticker;
+    const scoreColor = (d.score||0) >= 0 ? 'var(--amber)' : 'var(--red)';
+    return `
+    <div class="fa-trow-wrap" data-ticker="${d.ticker}">
+      <div class="fa-trow fa-row-grid" data-ticker="${d.ticker}">
+        <span class="fa-rank mono">${d.rank ?? "—"}</span>
+        <span class="fa-ticker">${d.ticker}</span>
+        <span><span class="fa-sector-pill">${d.sector||"—"}</span></span>
+        <span class="fa-score-num" style="color:${scoreColor}">${d.score!==undefined ? d.score.toFixed(3) : "—"}</span>
+        <span class="fa-col-hide-sm">
+          <div class="fa-mini-factors">
+            ${miniBar(d.value_score,'var(--cyan)')}
+            ${miniBar(d.quality_score,'var(--violet)')}
+            ${miniBar(d.momentum_score,'var(--amber)')}
+          </div>
+        </span>
+        <span class="fa-col-hide-sm">${price52wCell(d)}</span>
+      </div>
+      <div class="fa-detail ${isOpen?'fa-open':''}" data-detail="${d.ticker}">
+        ${detailHtml(d)}
+      </div>
+    </div>`;
+  }
+
+  function miniBar(v, color){
+    if (v === undefined) return `<div class="fa-mini-bar" style="height:2px; background:var(--border-soft)"></div>`;
+    const h = Math.max(3, Math.min(20, Math.abs(v)/3*20));
+    return `<div class="fa-mini-bar" style="height:${h}px; background:${color}; opacity:${v<0?0.45:1}"></div>`;
+  }
+
+  // cella compatta per la riga: prezzo + mini-barra di posizione nel range 52W
+  function price52wCell(d){
+    if (d.price === undefined) return `<span class="mono" style="color:var(--text-mute)">—</span>`;
+    const priceLabel = `<div class="mono" style="font-size:12px; text-align:right">${money(d.price)}</div>`;
+    if (d.high_52w === undefined || d.low_52w === undefined || d.high_52w <= d.low_52w){
+      return priceLabel;
+    }
+    const pos = Math.max(0, Math.min(100, (d.price - d.low_52w) / (d.high_52w - d.low_52w) * 100));
+    return `${priceLabel}
+      <div class="fa-52w-track"><div class="fa-52w-fill" style="left:${pos}%"></div></div>`;
+  }
+
+  // blocco esteso per il pannello di dettaglio: low —— posizione —— high
+  function range52wBlock(d){
+    if (d.price === undefined) return "";
+    const hasRange = d.high_52w !== undefined && d.low_52w !== undefined && d.high_52w > d.low_52w;
+    const pos = hasRange ? Math.max(0, Math.min(100, (d.price - d.low_52w) / (d.high_52w - d.low_52w) * 100)) : null;
+    return `<div class="fa-range52-block">
+      <div class="fa-factor-label" style="color:var(--text-dim)">
+        <span>Prezzo &amp; range 52 settimane</span>
+        <span class="mono" style="color:var(--text)">${money(d.price)}</span>
+      </div>
+      ${hasRange ? `
+        <div class="fa-52w-track-lg"><div class="fa-52w-fill-lg" style="left:${pos}%"></div></div>
+        <div class="fa-range52-labels">
+          <span class="mono">${money(d.low_52w)}<br><span class="fa-metric-label">52W low</span></span>
+          <span class="mono" style="text-align:center; color:var(--text-mute)">${pos.toFixed(0)}% del range</span>
+          <span class="mono" style="text-align:right">${money(d.high_52w)}<br><span class="fa-metric-label">52W high</span></span>
+        </div>
+        <div class="fa-note" style="font-size:11px; margin-top:6px;">
+          Solo contesto descrittivo — la distanza dai massimi/minimi non è un segnale d'acquisto o vendita.
+        </div>
+      ` : `<div class="fa-note" style="font-size:11.5px">Range 52W non disponibile.</div>`}
+    </div>`;
+  }
+
+  function detailHtml(d){
+    const factors = [
+      {key:'value_score', label:'Value', color:'var(--cyan)'},
+      {key:'quality_score', label:'Quality', color:'var(--violet)'},
+      {key:'momentum_score', label:'Momentum', color:'var(--amber)'},
+    ];
+    const factorHtml = factors.map(f=>{
+      const v = d[f.key];
+      return `<div class="fa-factor-block">
+        <div class="fa-factor-label" style="color:${f.color}">
+          <span>${f.label}</span><span class="mono">${v!==undefined?(v>=0?'+':'')+v.toFixed(2):'—'}</span>
+        </div>
+        ${divergingBar(v, 3, f.color, 8)}
+      </div>`;
+    }).join("");
+
+    const metrics = Object.keys(METRIC_META).filter(k=>d[k]!==undefined);
+    const metricsHtml = metrics.length ? `<div class="fa-metrics-grid">${
+      metrics.map(k=>`<div class="fa-metric">
+        <div class="fa-metric-label">${METRIC_META[k].label}</div>
+        <div class="fa-metric-val">${METRIC_META[k].fmt(d[k])}</div>
+      </div>`).join("")
+    }</div>` : `<div class="fa-note" style="font-size:11.5px">Metriche estese non disponibili nel demo — importa il ranking.csv completo per vederle tutte.</div>`;
+
+    return `<div class="fa-detail-grid">${factorHtml}</div>${range52wBlock(d)}${metricsHtml}`;
+  }
+
+  document.getElementById('fa-tbody').addEventListener('click', e=>{
+    const row = e.target.closest('.fa-trow');
+    if (!row) return;
+    const t = row.dataset.ticker;
+    openTicker = (openTicker === t) ? null : t;
+    render();
+  });
+
+  function renderSectorMix(){
+    const top30 = data.slice().sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,30);
+    const counts = {};
+    top30.forEach(d=>{ counts[d.sector] = (counts[d.sector]||0)+1; });
+    const entries = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+    const max = Math.max(1, ...entries.map(e=>e[1]));
+    document.getElementById('fa-sm-rows').innerHTML = entries.map(([sec,n])=>`
+      <div class="fa-sm-row">
+        <span class="fa-sm-label">${sec}</span>
+        <div class="fa-sm-track"><div class="fa-sm-fill" style="width:${n/max*100}%"></div></div>
+        <span class="fa-sm-count mono">${n}</span>
+      </div>`).join("");
+  }
+
+  // ---------- model tab: robustness heatgrid ----------
+  const ROBUST = {
+    rows: [10,15,20,25],
+    cols: ["70/30","50/50","30/70"],
+    vals: {
+      10:[0.288,0.308,0.294],
+      15:[0.294,0.309,0.237],
+      20:[0.277,0.275,0.226],
+      25:[0.275,0.261,0.218],
+    }
+  };
+  function heatColor(v){
+    // v roughly in [0.16, 0.31] -> map to amber intensity
+    const t = Math.max(0, Math.min(1, (v-0.16)/(0.31-0.16)));
+    const from = [138,100,35], to = [242,169,59];
+    const c = from.map((f,i)=>Math.round(f+(to[i]-f)*t));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  (function renderHeat(){
+    let html = `<div></div>`;
+    ROBUST.cols.forEach(c=>html += `<div class="fa-heathead">${c}</div>`);
+    ROBUST.rows.forEach(n=>{
+      html += `<div class="fa-heatlabel">N=${n}</div>`;
+      ROBUST.vals[n].forEach(v=>{
+        html += `<div class="fa-heatcell" style="background:${heatColor(v)}">${(v*100).toFixed(1)}%</div>`;
+      });
+    });
+    document.getElementById('fa-heatgrid').innerHTML = html;
+  })();
+
+  populateSectorFilter();
+  render();
+  loadLiveData();
+})();
+</script>
+
+</div>
+</body>
+</html>
