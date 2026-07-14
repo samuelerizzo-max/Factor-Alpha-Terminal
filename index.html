@@ -273,6 +273,26 @@
 .fa-predict-features { margin-top: 12px; }
 .fa-predict-features .fa-sm-title { margin-bottom: 6px; }
 
+/* ---------- checklist pre-trade (5 gate) ---------- */
+.fa-gate-badge {
+  display: inline-block; font-size: 9px; font-family: 'IBM Plex Mono', monospace;
+  border: 1px solid var(--amber); border-radius: 8px; padding: 1px 6px;
+  margin-left: 7px; vertical-align: middle;
+}
+.fa-gate-checklist { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.fa-gate-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-soft); }
+.fa-gate-row:last-child { border-bottom: none; }
+.fa-gate-check { margin-top: 3px; width: 15px; height: 15px; accent-color: var(--green); cursor: pointer; flex-shrink: 0; }
+.fa-gate-body { flex: 1; min-width: 0; }
+.fa-gate-label { font-size: 12px; color: var(--text); margin-bottom: 5px; line-height: 1.4; }
+.fa-gate-note {
+  width: 100%; background: var(--panel2); border: 1px solid var(--border-soft); border-radius: 5px;
+  color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;
+  padding: 6px 8px; resize: vertical; min-height: 30px; box-sizing: border-box;
+}
+.fa-gate-note:focus { border-color: var(--amber); outline: none; }
+.fa-gate-note::placeholder { color: var(--text-mute); }
+
 @media (max-width: 640px) {
   .fa-row-grid { grid-template-columns: 30px 56px 1fr 76px; }
   .fa-col-hide-sm { display: none; }
@@ -616,11 +636,13 @@
   function rowHtml(d, scoreMax){
     const isOpen = openTicker === d.ticker;
     const scoreColor = (d.score||0) >= 0 ? 'var(--amber)' : 'var(--red)';
+    const gp = checklistPassed(d.ticker);
+    const gateBadge = gp > 0 ? `<span class="fa-gate-badge" style="color:${gp>=4?'var(--green)':'var(--amber)'}; border-color:${gp>=4?'var(--green)':'var(--amber)'};">${gp}/5</span>` : '';
     return `
     <div class="fa-trow-wrap" data-ticker="${d.ticker}">
       <div class="fa-trow fa-row-grid" data-ticker="${d.ticker}">
         <span class="fa-rank mono">${d.rank ?? "—"}</span>
-        <span class="fa-ticker">${d.ticker}</span>
+        <span class="fa-ticker">${d.ticker}${gateBadge}</span>
         <span><span class="fa-sector-pill">${d.sector||"—"}</span></span>
         <span class="fa-score-num" style="color:${scoreColor}">${d.score!==undefined ? d.score.toFixed(3) : "—"}</span>
         <span class="fa-col-hide-sm">
@@ -680,6 +702,54 @@
     </div>`;
   }
 
+  // ---------- Checklist pre-trade: 5 gate, salvati in localStorage per ticker ----------
+  // Nota: persistenza solo su questo browser/dispositivo, non sincronizzata altrove
+  // (e' l'unico modo per farla funzionare su un sito statico senza backend).
+  const GATES = [
+    {key:'g1', label:'Gate 1 — Fattori puliti: value/quality non nascondono una value trap?'},
+    {key:'g2', label:'Gate 2 — Utile normalizzato: depurato da poste straordinarie / ciclo anomalo?'},
+    {key:'g3', label:'Gate 3 — Bear sopravvivibile: se si avvera, e\' perdita temporanea o permanente?'},
+    {key:'g4', label:'Gate 4 — Invalidazione fissata: evento specifico e data scritti prima di comprare?'},
+    {key:'g5', label:'Gate 5 — Fit di portafoglio: no overlap Fideuram, size ok, non concentra il settore?'},
+  ];
+
+  function loadChecklist(ticker){
+    try {
+      const raw = localStorage.getItem('fa_checklist_' + ticker);
+      return raw ? JSON.parse(raw) : {};
+    } catch(e){ return {}; }
+  }
+  function saveChecklistField(ticker, gateKey, field, value){
+    try {
+      const d = loadChecklist(ticker);
+      d[gateKey] = d[gateKey] || {};
+      d[gateKey][field] = value;
+      localStorage.setItem('fa_checklist_' + ticker, JSON.stringify(d));
+    } catch(e){ console.warn('impossibile salvare la checklist:', e); }
+  }
+  function checklistPassed(ticker){
+    const d = loadChecklist(ticker);
+    return GATES.filter(g => d[g.key] && d[g.key].checked).length;
+  }
+
+  function gateChecklistHtml(ticker){
+    const d = loadChecklist(ticker);
+    return `<div class="fa-gate-checklist">
+      <div class="fa-sm-title" style="margin-bottom:8px;">Checklist pre-trade</div>
+      ${GATES.map(g=>{
+        const gd = d[g.key] || {};
+        return `<div class="fa-gate-row">
+          <input type="checkbox" class="fa-gate-check" data-ticker="${ticker}" data-gate="${g.key}" ${gd.checked ? 'checked' : ''}>
+          <div class="fa-gate-body">
+            <div class="fa-gate-label">${g.label}</div>
+            <textarea class="fa-gate-note" data-ticker="${ticker}" data-gate="${g.key}" placeholder="Note / condizione specifica…">${gd.note ? gd.note.replace(/</g,'&lt;') : ''}</textarea>
+          </div>
+        </div>`;
+      }).join('')}
+      <div class="fa-note" style="font-size:10.5px; margin-top:6px;">Salvato solo su questo browser — se cancelli i dati di Safari o cambi dispositivo, si perde.</div>
+    </div>`;
+  }
+
   function detailHtml(d){
     const factors = [
       {key:'value_score', label:'Value', color:'var(--cyan)'},
@@ -704,7 +774,7 @@
       </div>`).join("")
     }</div>` : `<div class="fa-note" style="font-size:11.5px">Metriche estese non disponibili nel demo — importa il ranking.csv completo per vederle tutte.</div>`;
 
-    return `<div class="fa-detail-grid">${factorHtml}</div>${range52wBlock(d)}${metricsHtml}`;
+    return `<div class="fa-detail-grid">${factorHtml}</div>${range52wBlock(d)}${metricsHtml}${gateChecklistHtml(d.ticker)}`;
   }
 
   document.getElementById('fa-tbody').addEventListener('click', e=>{
@@ -713,6 +783,32 @@
     const t = row.dataset.ticker;
     openTicker = (openTicker === t) ? null : t;
     render();
+  });
+
+  document.getElementById('fa-tbody').addEventListener('change', e=>{
+    const el = e.target;
+    if (el.classList.contains('fa-gate-check')){
+      saveChecklistField(el.dataset.ticker, el.dataset.gate, 'checked', el.checked);
+      const badge = el.closest('.fa-trow-wrap').querySelector('.fa-gate-badge');
+      const gp = checklistPassed(el.dataset.ticker);
+      if (gp > 0){
+        const color = gp>=4?'var(--green)':'var(--amber)';
+        if (badge){ badge.textContent = gp+'/5'; badge.style.color = color; badge.style.borderColor = color; }
+        else {
+          const span = document.createElement('span');
+          span.className = 'fa-gate-badge';
+          span.style.color = color; span.style.borderColor = color;
+          span.textContent = gp+'/5';
+          el.closest('.fa-trow-wrap').querySelector('.fa-ticker').appendChild(span);
+        }
+      } else if (badge){ badge.remove(); }
+    }
+  });
+  document.getElementById('fa-tbody').addEventListener('input', e=>{
+    const el = e.target;
+    if (el.classList.contains('fa-gate-note')){
+      saveChecklistField(el.dataset.ticker, el.dataset.gate, 'note', el.value);
+    }
   });
 
   function renderSectorMix(){
