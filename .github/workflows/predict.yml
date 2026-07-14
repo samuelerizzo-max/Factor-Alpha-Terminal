@@ -1,0 +1,41 @@
+name: Modello Predittivo
+
+on:
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Ticker da analizzare, separati da virgola (es. CF,AOS,EIX)'
+        required: true
+        default: 'CF,AOS,EIX'
+      include_macro:
+        description: 'Includi feature macro (VIX, tassi 10Y, dollaro, S&P)?'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Esegui il modello predittivo
+        run: python predict_model.py "${{ github.event.inputs.tickers }}" "${{ github.event.inputs.include_macro }}"
+
+      - name: Commit e push dei risultati
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Aggiornamento predizioni modello"
+          file_pattern: 'predictions.json'
