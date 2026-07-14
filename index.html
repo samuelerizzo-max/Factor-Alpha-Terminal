@@ -782,6 +782,39 @@
     </div>`;
   }
 
+  function equityCurveSVG(curve){
+    if (!curve || curve.length < 2) return '<div class="fa-note" style="font-size:11px">Nessun trade eseguito.</div>';
+    const w = 560, h = 100, pad = 6;
+    const minV = Math.min(...curve, 1), maxV = Math.max(...curve, 1);
+    const range = (maxV - minV) || 1;
+    const n = curve.length;
+    const x = i => pad + (i/(n-1)) * (w - 2*pad);
+    const y = v => h - pad - ((v - minV)/range) * (h - 2*pad);
+    const path = curve.map((v,i) => `${i===0?'M':'L'} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ');
+    const oneY = y(1);
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:100%; height:${h}px; display:block;">
+      <line x1="0" y1="${oneY.toFixed(1)}" x2="${w}" y2="${oneY.toFixed(1)}" stroke="var(--border-soft)" stroke-width="1" stroke-dasharray="3,3"/>
+      <path d="${path}" fill="none" stroke="var(--green)" stroke-width="1.6"/>
+    </svg>`;
+  }
+
+  function backtestBlock(bt, horizon){
+    if (!bt) return '';
+    const passColor = bt.beats_buy_hold ? 'var(--green)' : 'var(--red)';
+    const nColor = bt.n_trades_long < 10 ? 'var(--red)' : 'var(--text)';
+    return `<div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border-soft);">
+      <div class="fa-sm-title" style="margin-bottom:8px;">Backtest non sovrapposto — long/cash ogni ${horizon}g</div>
+      <div class="fa-predict-stats">
+        <div><div class="fa-metric-label">Rendimento tot.</div><div class="fa-metric-val" style="color:${passColor}">${(bt.total_return*100).toFixed(1)}%</div></div>
+        <div><div class="fa-metric-label">Buy&amp;Hold</div><div class="fa-metric-val" style="color:var(--text-dim)">${(bt.buy_hold_total_return*100).toFixed(1)}%</div></div>
+        <div><div class="fa-metric-label">Max drawdown</div><div class="fa-metric-val" style="color:var(--red)">${(bt.max_drawdown*100).toFixed(1)}%</div></div>
+        <div><div class="fa-metric-label">Trade long · win rate</div><div class="fa-metric-val" style="color:${nColor}">${bt.n_trades_long} · ${bt.win_rate!==null ? (bt.win_rate*100).toFixed(0)+'%' : '—'}</div></div>
+      </div>
+      ${bt.n_trades_long < 10 ? `<div class="fa-note" style="font-size:11px; color:var(--red); margin-top:6px;">⚠ Solo ${bt.n_trades_long} operazioni non sovrapposte — win rate e Sharpe non sono statisticamente significativi, trattali come descrittivi.</div>` : ''}
+      <div class="fa-predict-chart" style="margin-top:10px;">${equityCurveSVG(bt.equity_curve)}</div>
+    </div>`;
+  }
+
   function renderPredictCard(r){
     const passColor = r.beats_baseline ? 'var(--green)' : 'var(--red)';
     const passLabel = r.beats_baseline ? '✓ batte la baseline' : '✗ non batte la baseline';
@@ -808,6 +841,7 @@
             <div class="fa-sm-track"><div class="fa-sm-fill" style="width:${(v/maxImp*100).toFixed(0)}%; background:var(--violet)"></div></div>
           </div>`).join('')}
       </div>
+      ${backtestBlock(r.backtest, r.horizon)}
     </div>`;
   }
 

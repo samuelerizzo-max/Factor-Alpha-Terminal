@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+# ============================================================
+# MODELLO PREDITTIVO — XGBoost su ticker selezionati (rendimento 30gg borsa)
+# Lanciato da GitHub Actions con input "tickers" e "include_macro".
+# Scrive predictions.json alla radice.
+#
+# v2: feature tecniche curate (aggiunti MACD histogram, ADX, ATR
+# normalizzato; rimossi i lag a 1-2 giorni, i piu' simili a rumore puro)
+# + layer di backtest non sovrapposto sopra le previsioni (long/cash ogni
+# HORIZON giorni, costi reali, confronto esplicito con buy&hold).
+#
+# NOTA SUL MACRO: aggiunge 6 feature (VIX, tassi 10Y, dollaro, S&P) alle
+# feature tecniche. Con un test set che ha gia' poche osservazioni
+# indipendenti (~8), piu' feature = piu' rischio di overfitting, non
+# meno. Il flag e' pensato per essere confrontato (con/senza), non per
+# essere lasciato sempre acceso senza guardare la differenza.
+# ============================================================
+import sys
+import json
+import datetime as dt
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import yfinance as yf
+from xgboost import XGBRegressor
+from sklearn.metrics import r2_score, mean_squared_error
+
+HORIZON = 30  # giorni di borsa, non calendario
+COST_PER_SIDE = 0.0005  # 5 bps per lato = 10 bps andata+ritorno (stessa convenzione del motore fattoriale)
+OUT_FILE = Path(__file__).resolve().parent / "predictions.json"
+
+TECH_FEATURES = ['EMA_10', 'EMA_50', 'RSI_14', 'VOL_10', 'VOL_21', 'VOL_CHANGE',
+                  'RET_LAG_5', 'MOM_21', 'MACD_HIST', 'ADX_14', 'ATR_NORM']
+
+MACRO_FEATURES = ['VIX_LEVEL', 'VIX_CHANGE_5D', 'TNX_LEVEL', 'TNX_CHANGE_21D',
+                  'DXY_MOM_21', 'SPY_MOM_21']
+
+
+def log(*a):
+    print(*a, flush=True)
+
+
+def compute_macd_hist(close, fast=12, slow=26, signal=9):
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line - signal_line
+
+
+def compute_adx_atr(high, low, close, period=14):
+    """ADX e ATR col metodo di Wilder (stesso smoothing esponenziale usato per l'RSI)."""
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+    prev_close = close.shift(1)
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    up_move = high - prev_high
+    down_move = prev_low - low
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=high.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=high.index)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+    minus_di = 100 * (minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+    return adx, atr
+
+
+def build_features(data):
+    log_ret = np.log(data['Close'] / data['Close'].shift(1))
+    data['EMA_10'] = data['Close'].ewm(span=10, adjust=False).mean()
+    data['EMA_50'] = data['Close'].ewm(span=50, adjust=False).mean()
+
+    delta = data['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / 14, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / 14, adjust=False).mean()
+    data['RSI_14'] = 100 - (100 / (1 + avg_gain / avg_loss))
+
+    data['VOL_10'] = log_ret.rolling(10).std()
+    data['VOL_21'] = log_ret.rolling(21).std()
+    data['VOL_CHANGE'] = data['Volume'].pct_change()
+    data['RET_LAG_5'] = data['Close'].pct_change(5)
+    data['MOM_21'] = data['Close'].pct_change(21)
+
+    data['MACD_HIST'] = compute_macd_hist(data['Close'])
+    adx, atr = compute_adx_atr(data['High'], data['Low'], data['Close'])
+    data['ADX_14'] = adx
+    data['ATR_NORM'] = atr / data['Close']
+    return data
+
+
+def fetch_macro():
+    try:
+        raw = yf.download(["^VIX", "^TNX", "DX-Y.NYB", "SPY"], period="5y", progress=False, auto_adjust=True)["Close"]
+    except Exception as e:
+        log(f"  macro: download fallito ({e}), procedo senza.")
+        return None
+    if raw is None or raw.empty:
+        return None
+    macro = pd.DataFrame(index=raw.index)
+    if "^VIX" in raw.columns:
+        macro['VIX_LEVEL'] = raw["^VIX"]
+        macro['VIX_CHANGE_5D'] = raw["^VIX"].pct_change(5)
+    if "^TNX" in raw.columns:
+        macro['TNX_LEVEL'] = raw["^TNX"]
+        macro['TNX_CHANGE_21D'] = raw["^TNX"].diff(21)
+    if "DX-Y.NYB" in raw.columns:
+        macro['DXY_MOM_21'] = raw["DX-Y.NYB"].pct_change(21)
+    if "SPY" in raw.columns:
+        macro['SPY_MOM_21'] = raw["SPY"].pct_change(21)
+    return macro
+
+
+def run_backtest(y_test_actual, y_pred, dates_str):
+    """
+    Backtest NON sovrapposto: una decisione ogni HORIZON giorni (non ogni
+    giorno -- altrimenti le posizioni si accavallerebbero, stesso principio
+    del purge anti-leakage). Long se il modello prevede rendimento positivo,
+    altrimenti cash. Costi reali. Confronto esplicito con buy&hold: un
+    modello puo' avere un win rate alto e comunque perdere contro il tenere
+    e basta, se sta in cash anche durante rialzi veri.
+    """
+    n = len(y_test_actual)
+    idx = list(range(0, n, HORIZON))
+    equity = [1.0]
+    bh_equity = [1.0]
+    trades = []
+    for i in idx:
+        pred = float(y_pred[i])
+        actual = float(y_test_actual[i])
+        if pred > 0:
+            net_return = actual - 2 * COST_PER_SIDE
+            trades.append({"date": dates_str[i], "predicted": round(pred, 4),
+                            "actual": round(actual, 4), "net_return": round(net_return, 4)})
+        else:
+            net_return = 0.0
+        equity.append(equity[-1] * (1 + net_return))
+        bh_equity.append(bh_equity[-1] * (1 + actual))
+
+    n_trades = len(trades)
+    wins = sum(1 for t in trades if t["net_return"] > 0)
+    win_rate = (wins / n_trades) if n_trades else None
+    total_return = equity[-1] - 1
+    bh_total_return = bh_equity[-1] - 1
+    rr = np.array([t["net_return"] for t in trades]) if trades else np.array([])
+    sharpe_like = float(rr.mean() / rr.std() * np.sqrt(252 / HORIZON)) if len(rr) > 1 and rr.std() > 0 else None
+    eq = pd.Series(equity)
+    max_dd = float((eq / eq.cummax() - 1).min())
+
+    return {
+        "n_decision_points": len(idx),
+        "n_trades_long": n_trades,
+        "win_rate": round(win_rate, 3) if win_rate is not None else None,
+        "total_return": round(float(total_return), 4),
+        "buy_hold_total_return": round(float(bh_total_return), 4),
+        "beats_buy_hold": bool(total_return > bh_total_return),
+        "sharpe_like": round(sharpe_like, 2) if sharpe_like is not None else None,
+        "max_drawdown": round(max_dd, 4),
+        "equity_curve": [round(float(e), 4) for e in equity],
+        "trades": trades,
+    }
+
+
+def run_for_ticker(ticker, macro_df, use_macro):
+    log(f"\n--- {ticker} ---")
+    raw = yf.download(ticker, period="5y", progress=False, auto_adjust=True)
+    if raw is None or raw.empty or len(raw) < 150:
+        log(f"  dati insufficienti per {ticker}, salto.")
+        return None
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.get_level_values(0)
+
+    data = build_features(raw.copy())
+
+    features = list(TECH_FEATURES)
+    if use_macro and macro_df is not None:
+        data = data.join(macro_df, how='left')
+        features = features + [c for c in MACRO_FEATURES if c in data.columns]
+
+    data['TARGET'] = data['Close'].shift(-HORIZON) / data['Close'] - 1
+    model_df = data[features + ['TARGET']].dropna()
+
+    if len(model_df) < 100:
+        log(f"  righe utilizzabili insufficienti ({len(model_df)}) per {ticker}, salto.")
+        return None
+
+    split_idx = int(len(model_df) * 0.8)
+    train = model_df.iloc[: split_idx - HORIZON]
+    test = model_df.iloc[split_idx:]
+    if len(train) < 50 or len(test) < 10:
+        log(f"  train/test troppo piccoli per {ticker}, salto.")
+        return None
+
+    X_train, y_train = train[features], train['TARGET']
+    X_test, y_test = test[features], test['TARGET']
+
+    model = XGBRegressor(max_depth=3, learning_rate=0.05, n_estimators=100,
+                          subsample=0.8, colsample_bytree=0.8,
+                          objective='reg:squarederror', random_state=42)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    r2 = float(r2_score(y_test, y_pred))
+    rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+    baseline_pred = np.full_like(y_test, y_train.mean())
+    baseline_r2 = float(r2_score(y_test, baseline_pred))
+    baseline_rmse = float(np.sqrt(mean_squared_error(y_test, baseline_pred)))
+    eff_n = len(test) / HORIZON
+
+    importances = pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)
+
+    series = [{"date": d.strftime("%Y-%m-%d"), "actual": float(a), "predicted": float(p)}
+              for d, a, p in zip(test.index, y_test.values, y_pred)]
+
+    backtest = run_backtest(y_test.values, y_pred, [d.strftime("%Y-%m-%d") for d in test.index])
+
+    log(f"  R2={r2:.4f} (baseline {baseline_r2:.4f}) | RMSE={rmse:.4f} | eff.N~{eff_n:.1f} | feature={len(features)}")
+    if len(features) > eff_n:
+        log(f"  >> ATTENZIONE: {len(features)} feature ma solo ~{eff_n:.1f} osservazioni indipendenti nel test.")
+    log(f"  Backtest: {backtest['n_trades_long']} trade long, win rate "
+        f"{backtest['win_rate']}, tot {backtest['total_return']:+.1%} vs buy&hold {backtest['buy_hold_total_return']:+.1%}")
+    if backtest['n_trades_long'] < 10:
+        log("  >> ATTENZIONE: meno di 10 operazioni. Win rate e Sharpe non sono statisticamente significativi.")
+
+    return {
+        "ticker": ticker,
+        "horizon": HORIZON,
+        "include_macro": bool(use_macro),
+        "n_features": len(features),
+        "n_train": int(len(train)),
+        "n_test": int(len(test)),
+        "effective_n_test": round(eff_n, 1),
+        "r2": round(r2, 4),
+        "rmse": round(rmse, 5),
+        "baseline_r2": round(baseline_r2, 4),
+        "baseline_rmse": round(baseline_rmse, 5),
+        "beats_baseline": bool(r2 > baseline_r2),
+        "feature_importances": {k: round(float(v), 4) for k, v in importances.items()},
+        "series": series,
+        "backtest": backtest,
+    }
+
+
+def main():
+    if len(sys.argv) < 2 or not sys.argv[1].strip():
+        raise SystemExit("Uso: python predict_model.py TICKER1,TICKER2,... [true|false]")
+    tickers = [t.strip().upper() for t in sys.argv[1].split(",") if t.strip()]
+    use_macro = True
+    if len(sys.argv) >= 3:
+        use_macro = sys.argv[2].strip().lower() in ("true", "1", "yes", "si", "sì")
+    log(f"Ticker richiesti: {tickers} | include_macro={use_macro}")
+
+    macro_df = fetch_macro() if use_macro else None
+    if use_macro and macro_df is None:
+        log("  macro richiesto ma non disponibile: procedo solo con feature tecniche.")
+
+    results = []
+    for t in tickers:
+        try:
+            r = run_for_ticker(t, macro_df, use_macro)
+            if r:
+                results.append(r)
+        except Exception as e:
+            log(f"  ERRORE su {t}: {e}")
+
+    out = {
+        "generated_at": dt.datetime.utcnow().isoformat() + "Z",
+        "horizon_trading_days": HORIZON,
+        "include_macro": use_macro,
+        "requested_tickers": tickers,
+        "results": results,
+    }
+    OUT_FILE.write_text(json.dumps(out, indent=2))
+    log(f"\nScritto {OUT_FILE.name} con {len(results)}/{len(tickers)} ticker completati.")
+
+
+if __name__ == "__main__":
+    main()
