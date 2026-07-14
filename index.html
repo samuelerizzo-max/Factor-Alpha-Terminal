@@ -4,11 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>FCTR&lt;GO&gt; — Factor Alpha Terminal</title>
-
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0A0C0E">
-
-<!-- Home screen su iOS/iPadOS: apre a schermo intero, senza barra Safari -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="FCTR">
@@ -16,25 +13,12 @@
 <link rel="apple-touch-icon" sizes="167x167" href="apple-touch-icon-167.png">
 <link rel="apple-touch-icon" sizes="152x152" href="apple-touch-icon-152.png">
 <link rel="apple-touch-icon" sizes="120x120" href="apple-touch-icon-120.png">
-
-<!-- Home screen su Android/Chrome -->
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
-
 <style>
-  html, body {
-    margin: 0; padding: 0;
-    background: #06070A;
-    min-height: 100vh;
-  }
-  .fa-page {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 18px 14px 60px;
-  }
-  @media (min-width: 900px) {
-    .fa-page { padding: 32px 24px 60px; }
-  }
+  html, body { margin: 0; padding: 0; background: #06070A; min-height: 100vh; }
+  .fa-page { max-width: 1180px; margin: 0 auto; padding: 18px 14px 60px; }
+  @media (min-width: 900px) { .fa-page { padding: 32px 24px 60px; } }
   @supports (padding: max(0px)) {
     .fa-page {
       padding-left: max(14px, env(safe-area-inset-left));
@@ -277,6 +261,18 @@
 .fa-contrib-row { display: flex; justify-content: space-between; font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--border-soft); }
 .fa-contrib-row:last-child { border-bottom: none; }
 
+/* ---------- predict tab ---------- */
+.fa-predict-card {
+  background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px;
+  padding: 16px; margin-bottom: 14px;
+}
+.fa-predict-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.fa-predict-head .fa-ticker { font-size: 15px; }
+.fa-predict-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; margin-bottom: 4px; }
+.fa-predict-chart { margin: 12px 0 4px; }
+.fa-predict-features { margin-top: 12px; }
+.fa-predict-features .fa-sm-title { margin-bottom: 6px; }
+
 @media (max-width: 640px) {
   .fa-row-grid { grid-template-columns: 30px 56px 1fr 76px; }
   .fa-col-hide-sm { display: none; }
@@ -299,6 +295,7 @@
     <nav id="fa-tabs">
       <button class="fa-tab fa-active" data-tab="screen">SCREEN</button>
       <button class="fa-tab" data-tab="model">MODEL</button>
+      <button class="fa-tab" data-tab="predict">PREDICT</button>
     </nav>
 
     <section class="fa-panel fa-active" id="fa-panel-screen">
@@ -381,6 +378,27 @@
         L'edge reale è quindi <b>probabilmente inferiore</b> al +9.0% mostrato sopra.
         Trattare questo motore come <b>segnale di conferma</b> dentro il tuo processo — bear/base/bull,
         discussione prima di eseguire — non come strategia automatica.
+      </div>
+    </section>
+
+    <section class="fa-panel" id="fa-panel-predict">
+      <div class="fa-callout" style="margin-bottom:16px;">
+        <div class="fa-callout-tag">Come lanciarlo</div>
+        Vai su GitHub → tab <b>Actions</b> → workflow <b>"Modello Predittivo"</b> → <b>Run workflow</b> →
+        incolla i ticker separati da virgola (es. <span class="mono">CF,AOS,EIX</span>) → <b>Run workflow</b>.
+        Richiede circa 1-2 minuti (molto più veloce dell'aggiornamento del ranking, perché scarica solo
+        prezzi). Poi ricarica questa pagina.
+      </div>
+      <div class="mono" id="fa-predict-meta" style="font-size:11px; color:var(--text-mute); margin-bottom:14px;"></div>
+      <div id="fa-predict-results"></div>
+      <div class="fa-callout" style="margin-top:16px;">
+        <div class="fa-callout-tag">⚠ Attesa onesta sui risultati</div>
+        Questo modello prova a prevedere il rendimento a 30 giorni di borsa <b>solo da pattern tecnici di
+        prezzo</b> — a differenza dello SCREEN, non ha lo stesso fondamento accademico di value/quality/momentum.
+        Un R² vicino a zero o negativo è l'esito onesto atteso, non un fallimento. Con poche osservazioni
+        indipendenti nel test (sotto ~10 — i giorni si sovrappongono, non sono davvero indipendenti),
+        qualunque numero va preso con molta cautela. Trattalo come diagnostica di supporto, mai come
+        segnale di trading.
       </div>
     </section>
   </div>
@@ -741,9 +759,85 @@
     document.getElementById('fa-heatgrid').innerHTML = html;
   })();
 
+  // ---------- PREDICT tab: grafico SVG leggero, nessuna libreria esterna ----------
+  function predictionChartSVG(series){
+    if (!series || !series.length) return '<div class="fa-note" style="font-size:11px">Nessuna serie disponibile.</div>';
+    const w = 560, h = 130, pad = 6;
+    const vals = series.flatMap(d => [d.actual, d.predicted]);
+    const minV = Math.min(...vals, 0), maxV = Math.max(...vals, 0);
+    const range = (maxV - minV) || 1;
+    const n = series.length;
+    const x = i => pad + (n<=1 ? 0 : (i/(n-1)) * (w - 2*pad));
+    const y = v => h - pad - ((v - minV)/range) * (h - 2*pad);
+    const zeroY = y(0);
+    const lineFor = key => series.map((d,i) => `${i===0?'M':'L'} ${x(i).toFixed(1)} ${y(d[key]).toFixed(1)}`).join(' ');
+    return `<svg viewBox="0 0 ${w} ${h}" style="width:100%; height:${h}px; display:block;">
+      <line x1="0" y1="${zeroY.toFixed(1)}" x2="${w}" y2="${zeroY.toFixed(1)}" stroke="var(--border-soft)" stroke-width="1" stroke-dasharray="3,3"/>
+      <path d="${lineFor('actual')}" fill="none" stroke="var(--text)" stroke-width="1.6"/>
+      <path d="${lineFor('predicted')}" fill="none" stroke="var(--amber)" stroke-width="1.4" opacity="0.85"/>
+    </svg>
+    <div style="display:flex; gap:16px; font-size:10px; color:var(--text-dim); margin-top:4px;">
+      <span><span style="display:inline-block;width:10px;height:2px;background:var(--text);vertical-align:middle;margin-right:4px;"></span>Reale</span>
+      <span><span style="display:inline-block;width:10px;height:2px;background:var(--amber);vertical-align:middle;margin-right:4px;"></span>Previsto</span>
+    </div>`;
+  }
+
+  function renderPredictCard(r){
+    const passColor = r.beats_baseline ? 'var(--green)' : 'var(--red)';
+    const passLabel = r.beats_baseline ? '✓ batte la baseline' : '✗ non batte la baseline';
+    const entries = Object.entries(r.feature_importances || {}).sort((a,b)=>b[1]-a[1]).slice(0,5);
+    const maxImp = Math.max(...entries.map(e=>e[1]), 0.0001);
+    const nColor = r.effective_n_test < 10 ? 'var(--red)' : 'var(--text)';
+    return `<div class="fa-predict-card">
+      <div class="fa-predict-head">
+        <span class="fa-ticker">${r.ticker}</span>
+        <span class="mono" style="color:${passColor}; font-size:12px;">${passLabel}</span>
+      </div>
+      <div class="fa-predict-stats">
+        <div><div class="fa-metric-label">R²</div><div class="fa-metric-val" style="color:${passColor}">${r.r2}</div></div>
+        <div><div class="fa-metric-label">R² baseline</div><div class="fa-metric-val" style="color:var(--text-dim)">${r.baseline_r2}</div></div>
+        <div><div class="fa-metric-label">RMSE</div><div class="fa-metric-val">${r.rmse}</div></div>
+        <div><div class="fa-metric-label">Oss. indip. test</div><div class="fa-metric-val" style="color:${nColor}">~${r.effective_n_test}</div></div>
+      </div>
+      <div class="fa-predict-chart">${predictionChartSVG(r.series)}</div>
+      <div class="fa-predict-features">
+        <div class="fa-sm-title">Feature più usate dal modello</div>
+        ${entries.map(([k,v])=>`
+          <div class="fa-sm-row">
+            <span class="fa-sm-label">${k}</span>
+            <div class="fa-sm-track"><div class="fa-sm-fill" style="width:${(v/maxImp*100).toFixed(0)}%; background:var(--violet)"></div></div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  async function loadPredictions(){
+    const box = document.getElementById('fa-predict-results');
+    const meta = document.getElementById('fa-predict-meta');
+    if (!box) return;
+    try {
+      const res = await fetch('predictions.json', {cache:'no-store'});
+      if (!res.ok) throw new Error('predictions.json non trovato');
+      const data = await res.json();
+      const dt = new Date(data.generated_at);
+      meta.textContent = `Ultimo run: ${dt.toLocaleDateString('it-IT')} ${dt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})} · `
+        + `ticker richiesti: ${(data.requested_tickers||[]).join(', ')} · orizzonte ${data.horizon_trading_days}g di borsa · `
+        + `macro: ${data.include_macro ? 'sì' : 'no'}`;
+      if (!data.results || !data.results.length){
+        box.innerHTML = `<div class="fa-note">Nessun risultato utilizzabile (dati insufficienti per i ticker richiesti?).</div>`;
+        return;
+      }
+      box.innerHTML = data.results.map(renderPredictCard).join('');
+    } catch(e){
+      box.innerHTML = `<div class="fa-note">Nessuna predizione ancora disponibile. Lancia il modello da Actions (vedi istruzioni sopra), poi ricarica questa pagina.</div>`;
+      console.warn("predictions.json non disponibile:", e.message);
+    }
+  }
+
   populateSectorFilter();
   render();
   loadLiveData();
+  loadPredictions();
 })();
 </script>
 
