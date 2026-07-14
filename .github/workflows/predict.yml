@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tickers:
-        description: 'Ticker da analizzare, separati da virgola (es. CF,AOS,EIX)'
+        description: 'Ticker da analizzare, separati da virgola (es. EIX, FIX, MU, CF, LDOS, BIIB, MO, CYSH, ADBE, AOS, ACN, DECK, CMCSA, KLAC, URI, UAL,SOLV, EQT, SWK, GM)'
         required: true
         default: 'CF,AOS,EIX'
       include_macro:
