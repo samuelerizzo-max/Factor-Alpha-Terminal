@@ -48,6 +48,16 @@ def facts_of(cik):
 
 
 def durations(gaap, tags):
+    """Righe 'durata' per il primo tag della lista che ha un periodo ANNUALE
+    valido (330-400 giorni). PRIMA restituiva le righe del primo tag che
+    aveva QUALSIASI dato, anche solo pochi trimestri residui di una
+    vecchia tassonomia -- bug scoperto su T/BKNG: il loro primo tag in
+    lista aveva 3 righe trimestrali del 2018 e nient'altro, mentre il
+    secondo tag aveva 340 righe con un anno completo valido. Ora si
+    continua a cercare finche' non si trova un tag con un anno vero;
+    se nessuno ce l'ha, si usa comunque il primo che aveva dei dati
+    (fallback), invece di restituire il vuoto."""
+    fallback = None
     for t in tags:
         node = gaap.get(t)
         if not node:
@@ -61,9 +71,13 @@ def durations(gaap, tags):
                     a, b = d(r["start"]), d(r["end"])
                     if a and b:
                         rows.append({"end": r["end"], "val": r["val"], "days": (b - a).days})
-        if rows:
-            return rows
-    return []
+        if not rows:
+            continue
+        if any(330 <= r["days"] <= 400 for r in rows):
+            return rows  # tag buono: ha un anno valido, usalo subito
+        if fallback is None:
+            fallback = rows  # tienilo da parte, ma continua a cercare di meglio
+    return fallback if fallback is not None else []
 
 
 def instant(gaap, tags):
@@ -295,6 +309,30 @@ def main():
     ranges = [range_52w(t) for t in df.index]
     df["high_52w"] = [r[0] for r in ranges]
     df["low_52w"] = [r[1] for r in ranges]
+
+    # Riserva finale per le azioni in circolazione: se entrambi i tag EDGAR
+    # (dei e us-gaap) mancano, capita soprattutto per aziende a classi
+    # azionarie multiple (es. META) dove l'API companyfacts non espone il
+    # valore combinato perche' e' riportato con una dimensione per classe
+    # nell'XBRL originale. yfinance non passa dall'XBRL e non eredita
+    # questo problema -- lo usiamo SOLO per i pochi nomi che falliscono
+    # entrambe le fonti EDGAR, non per tutti (sarebbe lento e inutile).
+    missing_shares = df[df["shares"].isna()].index.tolist()
+    if missing_shares:
+        log(f"Azioni in circolazione mancanti da EDGAR per {len(missing_shares)} aziende, provo yfinance: {missing_shares}")
+        for tk in missing_shares:
+            try:
+                t = yf.Ticker(tk.replace(".", "-"))
+                try:
+                    info = t.get_info()  # yfinance recenti
+                except AttributeError:
+                    info = t.info  # yfinance piu' vecchie
+                sh = info.get("sharesOutstanding")
+                if sh:
+                    df.loc[tk, "shares"] = sh
+                    log(f"  {tk}: recuperato da yfinance ({sh:,})")
+            except Exception as e:
+                log(f"  {tk}: fallback yfinance fallito ({e})")
 
     df["mktcap"] = df["price"] * df["shares"]
     df["ev"] = df["mktcap"] + df["debt"] - df["cash"]
