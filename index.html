@@ -309,6 +309,11 @@
   font-family: 'IBM Plex Mono', monospace; font-size: 12px; padding: 5px 6px; border-radius: 4px; width: 100%;
   box-sizing: border-box;
 }
+.fa-inv-row select {
+  background: var(--panel); border: 1px solid var(--border-soft); color: var(--text);
+  font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; padding: 5px 4px; border-radius: 4px; width: 100%;
+  box-sizing: border-box;
+}
 .fa-inv-row input:disabled { opacity: 0.5; }
 .fa-inv-remove {
   background: none; border: none; color: var(--text-mute); cursor: pointer; font-size: 14px;
@@ -486,13 +491,17 @@
       </div>
 
       <div id="fa-inv-controls">
-        <label class="fa-inv-label">Capitale disponibile (USD)
+        <label class="fa-inv-label">Capitale principale (USD)
           <input type="number" id="fa-inv-cash" placeholder="es. 50000" class="fa-inv-cash-input">
         </label>
-        <label class="fa-inv-label fa-inv-checkbox-label">
-          <input type="checkbox" id="fa-inv-equal" checked> Pesi uguali automatici
+        <label class="fa-inv-label">Capitale speculativo (USD)
+          <input type="number" id="fa-inv-cash-spec" placeholder="es. 2000" class="fa-inv-cash-input">
         </label>
-        <button id="fa-inv-add-row" class="fa-upload-btn">+ Aggiungi titolo</button>
+        <label class="fa-inv-label fa-inv-checkbox-label">
+          <input type="checkbox" id="fa-inv-equal" checked> Pesi uguali automatici (per ciascun paniere)
+        </label>
+        <button id="fa-inv-add-row" class="fa-upload-btn">+ Titolo principale</button>
+        <button id="fa-inv-add-row-spec" class="fa-upload-btn" style="border-color:var(--amber); color:var(--amber);">+ Titolo speculativo</button>
       </div>
 
       <div id="fa-inv-table"></div>
@@ -1025,6 +1034,46 @@
     </div>`;
   }
 
+  // Grafico tecnico VERO — prezzo + medie mobili + RSI. Solo visualizzazione:
+  // nessun segnale di acquisto/vendita nascosto qui dentro, serve per vedere
+  // il pattern con i tuoi occhi, non per fingere che preveda il futuro.
+  function technicalChartSVG(chartSeries){
+    if (!chartSeries || chartSeries.length < 5) {
+      return '<div class="fa-note" style="font-size:11px">Serie tecnica non disponibile.</div>';
+    }
+    const w = 560, hPrice = 150, hRsi = 50, pad = 6, gap = 8;
+    const n = chartSeries.length;
+    const closes = chartSeries.map(d=>d.close);
+    const ema10s = chartSeries.map(d=>d.ema10);
+    const ema50s = chartSeries.map(d=>d.ema50);
+    const rsis = chartSeries.map(d=>d.rsi14);
+    const minP = Math.min(...closes, ...ema10s, ...ema50s);
+    const maxP = Math.max(...closes, ...ema10s, ...ema50s);
+    const rangeP = (maxP - minP) || 1;
+    const x = i => pad + (i/(n-1)) * (w - 2*pad);
+    const yP = v => hPrice - pad - ((v - minP)/rangeP) * (hPrice - 2*pad);
+    const yR = v => hRsi - ((v)/100) * hRsi;
+    const lineFor = arr => arr.map((v,i) => `${i===0?'M':'L'} ${x(i).toFixed(1)} ${yP(v).toFixed(1)}`).join(' ');
+    const rsiLine = rsis.map((v,i) => `${i===0?'M':'L'} ${x(i).toFixed(1)} ${yR(v).toFixed(1)}`).join(' ');
+    return `<svg viewBox="0 0 ${w} ${hPrice+gap+hRsi}" style="width:100%; height:${hPrice+gap+hRsi}px; display:block;">
+      <path d="${lineFor(closes)}" fill="none" stroke="var(--text)" stroke-width="1.4"/>
+      <path d="${lineFor(ema10s)}" fill="none" stroke="var(--cyan)" stroke-width="1.2" opacity="0.85"/>
+      <path d="${lineFor(ema50s)}" fill="none" stroke="var(--amber)" stroke-width="1.2" opacity="0.85"/>
+      <g transform="translate(0,${hPrice+gap})">
+        <rect x="0" y="0" width="${w}" height="${hRsi}" fill="var(--panel2)" opacity="0.4"/>
+        <line x1="0" y1="${yR(70).toFixed(1)}" x2="${w}" y2="${yR(70).toFixed(1)}" stroke="var(--red)" stroke-width="0.7" stroke-dasharray="2,2" opacity="0.6"/>
+        <line x1="0" y1="${yR(30).toFixed(1)}" x2="${w}" y2="${yR(30).toFixed(1)}" stroke="var(--green)" stroke-width="0.7" stroke-dasharray="2,2" opacity="0.6"/>
+        <path d="${rsiLine}" fill="none" stroke="var(--violet)" stroke-width="1.2"/>
+      </g>
+    </svg>
+    <div style="display:flex; gap:14px; font-size:10px; color:var(--text-dim); margin-top:4px; flex-wrap:wrap;">
+      <span><span style="display:inline-block;width:10px;height:2px;background:var(--text);vertical-align:middle;margin-right:4px;"></span>Prezzo</span>
+      <span><span style="display:inline-block;width:10px;height:2px;background:var(--cyan);vertical-align:middle;margin-right:4px;"></span>EMA 10</span>
+      <span><span style="display:inline-block;width:10px;height:2px;background:var(--amber);vertical-align:middle;margin-right:4px;"></span>EMA 50</span>
+      <span><span style="display:inline-block;width:10px;height:2px;background:var(--violet);vertical-align:middle;margin-right:4px;"></span>RSI 14 (70/30)</span>
+    </div>`;
+  }
+
   function renderPredictCard(r){
     const passColor = r.beats_baseline ? 'var(--green)' : 'var(--red)';
     const passLabel = r.beats_baseline ? '✓ batte la baseline' : '✗ non batte la baseline';
@@ -1036,12 +1085,15 @@
         <span class="fa-ticker">${r.ticker}</span>
         <span class="mono" style="color:${passColor}; font-size:12px;">${passLabel}</span>
       </div>
-      <div class="fa-predict-stats">
+      <div class="fa-sm-title" style="margin-bottom:6px;">Grafico tecnico (ultimi ~180 giorni)</div>
+      <div class="fa-predict-chart">${technicalChartSVG(r.chart_series)}</div>
+      <div class="fa-predict-stats" style="margin-top:14px;">
         <div><div class="fa-metric-label">R²</div><div class="fa-metric-val" style="color:${passColor}">${r.r2}</div></div>
         <div><div class="fa-metric-label">R² baseline</div><div class="fa-metric-val" style="color:var(--text-dim)">${r.baseline_r2}</div></div>
         <div><div class="fa-metric-label">RMSE</div><div class="fa-metric-val">${r.rmse}</div></div>
         <div><div class="fa-metric-label">Oss. indip. test</div><div class="fa-metric-val" style="color:${nColor}">~${r.effective_n_test}</div></div>
       </div>
+      <div class="fa-sm-title" style="margin-top:14px;">Previsione vs reale (test set)</div>
       <div class="fa-predict-chart">${predictionChartSVG(r.series)}</div>
       <div class="fa-predict-features">
         <div class="fa-sm-title">Feature più usate dal modello</div>
@@ -1079,7 +1131,8 @@
   }
 
   // ---------- INVESTMENT: calcolatore di size, MAI un esecutore di ordini ----------
-  let invCash = null;
+  let invCashMain = null;
+  let invCashSpec = null;
   let invEqualWeight = true;
   let invRows = [];
 
@@ -1088,46 +1141,57 @@
       const raw = localStorage.getItem('fa_investment');
       if (raw) {
         const d = JSON.parse(raw);
-        invCash = d.cash ?? null;
+        invCashMain = d.cashMain ?? d.cash ?? null;   // 'cash' = migrazione da versione precedente
+        invCashSpec = d.cashSpec ?? null;
         invEqualWeight = d.equalWeight !== false;
-        invRows = Array.isArray(d.rows) ? d.rows : [];
+        invRows = Array.isArray(d.rows) ? d.rows.map(r => ({type: 'main', ...r})) : [];
       }
     } catch(e){ console.warn('impossibile caricare investment:', e); }
   }
   function saveInvestmentState(){
     try {
-      localStorage.setItem('fa_investment', JSON.stringify({cash: invCash, equalWeight: invEqualWeight, rows: invRows}));
+      localStorage.setItem('fa_investment', JSON.stringify({
+        cashMain: invCashMain, cashSpec: invCashSpec, equalWeight: invEqualWeight, rows: invRows
+      }));
     } catch(e){ console.warn('impossibile salvare investment:', e); }
   }
 
   function renderInvestment(){
-    const cashInput = document.getElementById('fa-inv-cash');
+    const cashMainInput = document.getElementById('fa-inv-cash');
+    const cashSpecInput = document.getElementById('fa-inv-cash-spec');
     const equalBox = document.getElementById('fa-inv-equal');
-    if (!cashInput) return; // tab non ancora nel DOM
-    cashInput.value = invCash ?? '';
+    if (!cashMainInput) return; // tab non ancora nel DOM
+    cashMainInput.value = invCashMain ?? '';
+    cashSpecInput.value = invCashSpec ?? '';
     equalBox.checked = invEqualWeight;
 
-    const n = invRows.length;
-    if (invEqualWeight && n > 0){
-      const w = 100 / n;
-      invRows.forEach(r => r.weight = w);
+    // normalizzazione dei pesi INDIPENDENTE per tipo (principale/speculativo
+    // sono due panieri separati, ciascuno somma al 100% per conto suo)
+    if (invEqualWeight){
+      ['main','spec'].forEach(t => {
+        const rows = invRows.filter(r => (r.type||'main') === t);
+        if (rows.length) { const w = 100/rows.length; rows.forEach(r => r.weight = w); }
+      });
     }
-    const totalWeight = invRows.reduce((s,r)=>s+(+r.weight||0), 0);
 
     const head = `<div class="fa-inv-row fa-inv-head">
-      <span>Ticker</span><span>Settore</span><span>Gate</span><span>Peso%</span><span>Prezzo</span><span>Importo</span><span>Azioni~</span><span></span>
+      <span>Ticker</span><span>Tipo</span><span>Gate</span><span>Peso%</span><span>Prezzo</span><span>Importo</span><span>Azioni~</span><span></span>
     </div>`;
     const rowsHtml = invRows.map((r, i) => {
       const tk = (r.ticker || '').toUpperCase();
       const found = data.find(x => x.ticker === tk);
       const price = (r.manualPrice !== undefined && r.manualPrice !== null && r.manualPrice !== '') ? +r.manualPrice : (found ? found.price : null);
-      const sector = found ? found.sector : (tk ? '—' : '');
       const gp = tk ? checklistPassed(tk) : 0;
-      const amount = (invCash && r.weight) ? invCash * (r.weight/100) : null;
+      const type = r.type || 'main';
+      const cash = type === 'spec' ? invCashSpec : invCashMain;
+      const amount = (cash && r.weight) ? cash * (r.weight/100) : null;
       const shares = (amount && price) ? Math.floor(amount/price) : null;
       return `<div class="fa-inv-row" data-idx="${i}">
         <input class="fa-inv-ticker" data-idx="${i}" value="${r.ticker||''}" placeholder="TICKER">
-        <span class="mono" style="font-size:10.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${sector}</span>
+        <select class="fa-inv-type" data-idx="${i}">
+          <option value="main" ${type==='main'?'selected':''}>Principale</option>
+          <option value="spec" ${type==='spec'?'selected':''}>Speculativo</option>
+        </select>
         <span class="mono" style="font-size:10.5px; color:${gp>=4?'var(--green)':(gp>0?'var(--amber)':'var(--text-mute)')}">${gp>0? gp+'/5' : '—'}</span>
         <input class="fa-inv-weight" data-idx="${i}" type="number" step="0.1" value="${(r.weight||0).toFixed(1)}" ${invEqualWeight?'disabled':''}>
         <input class="fa-inv-price" data-idx="${i}" type="number" step="0.01" value="${price ?? ''}" placeholder="manuale">
@@ -1139,26 +1203,41 @@
 
     document.getElementById('fa-inv-table').innerHTML = head + rowsHtml;
 
-    const totalAlloc = invRows.reduce((s,r) => s + ((invCash && r.weight) ? invCash*(r.weight/100) : 0), 0);
+    function allocFor(type){
+      return invRows.filter(r=>(r.type||'main')===type)
+        .reduce((s,r)=>{ const cash = type==='spec'?invCashSpec:invCashMain; return s+((cash&&r.weight)?cash*(r.weight/100):0); }, 0);
+    }
+    function weightFor(type){
+      return invRows.filter(r=>(r.type||'main')===type).reduce((s,r)=>s+(+r.weight||0),0);
+    }
+    const mainRows = invRows.filter(r=>(r.type||'main')==='main');
+    const specRows = invRows.filter(r=>r.type==='spec');
+    const wMain = weightFor('main'), wSpec = weightFor('spec');
+    const okMain = mainRows.length===0 || Math.abs(wMain-100)<0.5;
+    const okSpec = specRows.length===0 || Math.abs(wSpec-100)<0.5;
+
+    let summary = `<div class="fa-note" style="margin-top:12px;">
+      <b>Principale</b> — peso: <b style="color:${okMain?'var(--green)':'var(--red)'}">${wMain.toFixed(1)}%</b>${!okMain?' (deve sommare a 100%)':''}
+      &nbsp;·&nbsp; allocato: <b>$${allocFor('main').toLocaleString('en-US',{maximumFractionDigits:0})}</b>${invCashMain?` di $${(+invCashMain).toLocaleString('en-US')}`:''}
+    </div>`;
+    if (specRows.length || invCashSpec){
+      summary += `<div class="fa-note" style="margin-top:4px;">
+        <b style="color:var(--amber)">Speculativo</b> — peso: <b style="color:${okSpec?'var(--green)':'var(--red)'}">${wSpec.toFixed(1)}%</b>${!okSpec?' (deve sommare a 100%)':''}
+        &nbsp;·&nbsp; allocato: <b>$${allocFor('spec').toLocaleString('en-US',{maximumFractionDigits:0})}</b>${invCashSpec?` di $${(+invCashSpec).toLocaleString('en-US')}`:''}
+      </div>`;
+    }
+
     const sectorCounts = {};
     invRows.forEach(r => {
       const found = data.find(x => x.ticker === (r.ticker||'').toUpperCase());
-      const sec = found ? found.sector : null;
-      if (sec) sectorCounts[sec] = (sectorCounts[sec]||0) + 1;
+      if (found) sectorCounts[found.sector] = (sectorCounts[found.sector]||0) + 1;
     });
-    const weightOk = invRows.length === 0 || Math.abs(totalWeight - 100) < 0.5;
-    let summary = `<div class="fa-note" style="margin-top:12px;">
-      Peso totale: <b style="color:${weightOk?'var(--green)':'var(--red)'}">${totalWeight.toFixed(1)}%</b>
-      ${!weightOk ? ' — deve sommare a 100%' : ''}
-      &nbsp;·&nbsp; Capitale allocato: <b>$${totalAlloc.toLocaleString('en-US',{maximumFractionDigits:0})}</b>${invCash ? ` di $${(+invCash).toLocaleString('en-US')}` : ''}
-    </div>`;
     const secEntries = Object.entries(sectorCounts);
     if (secEntries.length){
-      const maxSec = Math.max(...secEntries.map(e=>e[1]));
       const concentrated = secEntries.some(([,c]) => c / invRows.length > 0.4 && invRows.length >= 3);
-      summary += `<div class="fa-note" style="font-size:11px; margin-top:6px;">Settori: ${secEntries.map(([s,c])=>`${s} (${c})`).join(' · ')}</div>`;
+      summary += `<div class="fa-note" style="font-size:11px; margin-top:8px;">Settori (tutti i panieri): ${secEntries.map(([s,c])=>`${s} (${c})`).join(' · ')}</div>`;
       if (concentrated) {
-        summary += `<div class="fa-note" style="font-size:11px; color:var(--amber); margin-top:4px;">⚠ Più di 4 titoli su 10 nello stesso settore — concentrazione da tenere a mente (Gate 5).</div>`;
+        summary += `<div class="fa-note" style="font-size:11px; color:var(--amber); margin-top:4px;">⚠ Concentrazione settoriale da tenere a mente (Gate 5).</div>`;
       }
     }
     document.getElementById('fa-inv-summary').innerHTML = summary;
@@ -1167,17 +1246,24 @@
 
   function initInvestmentTab(){
     loadInvestmentState();
-    const cashInput = document.getElementById('fa-inv-cash');
+    const cashMainInput = document.getElementById('fa-inv-cash');
+    const cashSpecInput = document.getElementById('fa-inv-cash-spec');
     const equalBox = document.getElementById('fa-inv-equal');
     const addBtn = document.getElementById('fa-inv-add-row');
+    const addSpecBtn = document.getElementById('fa-inv-add-row-spec');
     const table = document.getElementById('fa-inv-table');
-    if (!cashInput || cashInput.dataset.wired) { renderInvestment(); return; }
-    cashInput.dataset.wired = "1";
+    if (!cashMainInput || cashMainInput.dataset.wired) { renderInvestment(); return; }
+    cashMainInput.dataset.wired = "1";
 
-    cashInput.addEventListener('input', e => { invCash = e.target.value ? +e.target.value : null; renderInvestment(); });
+    cashMainInput.addEventListener('input', e => { invCashMain = e.target.value ? +e.target.value : null; renderInvestment(); });
+    cashSpecInput.addEventListener('input', e => { invCashSpec = e.target.value ? +e.target.value : null; renderInvestment(); });
     equalBox.addEventListener('change', e => { invEqualWeight = e.target.checked; renderInvestment(); });
     addBtn.addEventListener('click', () => {
-      invRows.push({ticker:'', weight: invEqualWeight ? 0 : 0, manualPrice: null});
+      invRows.push({ticker:'', type:'main', weight: 0, manualPrice: null});
+      renderInvestment();
+    });
+    addSpecBtn.addEventListener('click', () => {
+      invRows.push({ticker:'', type:'spec', weight: 0, manualPrice: null});
       renderInvestment();
     });
     table.addEventListener('input', e => {
@@ -1187,6 +1273,11 @@
       else if (el.classList.contains('fa-inv-weight')) invRows[idx].weight = +el.value || 0;
       else if (el.classList.contains('fa-inv-price')) invRows[idx].manualPrice = el.value === '' ? null : +el.value;
       renderInvestment();
+    });
+    table.addEventListener('change', e => {
+      const el = e.target; const idx = +el.dataset.idx;
+      if (isNaN(idx) || !invRows[idx]) return;
+      if (el.classList.contains('fa-inv-type')) { invRows[idx].type = el.value; renderInvestment(); }
     });
     table.addEventListener('click', e => {
       if (e.target.classList.contains('fa-inv-remove')){

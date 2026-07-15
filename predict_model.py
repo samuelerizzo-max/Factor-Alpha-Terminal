@@ -215,6 +215,17 @@ def run_for_ticker(ticker, macro_df, use_macro):
     series = [{"date": d.strftime("%Y-%m-%d"), "actual": float(a), "predicted": float(p)}
               for d, a, p in zip(test.index, y_test.values, y_pred)]
 
+    # serie tecnica per il grafico (prezzo + EMA + RSI) -- SOLO visualizzazione,
+    # nessun segnale nascosto qui dentro. Ultimi ~180 giorni per leggibilita'.
+    chart_tail = data.dropna(subset=['Close', 'EMA_10', 'EMA_50', 'RSI_14']).tail(180)
+    chart_series = [{
+        "date": idx.strftime("%Y-%m-%d"),
+        "close": round(float(row['Close']), 2),
+        "ema10": round(float(row['EMA_10']), 2),
+        "ema50": round(float(row['EMA_50']), 2),
+        "rsi14": round(float(row['RSI_14']), 1),
+    } for idx, row in chart_tail.iterrows()]
+
     backtest = run_backtest(y_test.values, y_pred, [d.strftime("%Y-%m-%d") for d in test.index])
 
     log(f"  R2={r2:.4f} (baseline {baseline_r2:.4f}) | RMSE={rmse:.4f} | eff.N~{eff_n:.1f} | feature={len(features)}")
@@ -240,6 +251,7 @@ def run_for_ticker(ticker, macro_df, use_macro):
         "beats_baseline": bool(r2 > baseline_r2),
         "feature_importances": {k: round(float(v), 4) for k, v in importances.items()},
         "series": series,
+        "chart_series": chart_series,
         "backtest": backtest,
     }
 
