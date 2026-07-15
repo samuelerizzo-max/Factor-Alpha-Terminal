@@ -11,6 +11,7 @@
 # ============================================================
 import json
 import time
+import io
 import datetime as dt
 from pathlib import Path
 
@@ -21,6 +22,12 @@ import yfinance as yf
 
 # Personalizza con un contatto vero: la SEC lo richiede per l'accesso equo a EDGAR.
 UA = {"User-Agent": "factor-alpha-terminal contact@example.com"}
+# iShares blocca gli User-Agent non-browser su alcuni endpoint; qui serve uno vero.
+BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+IWV_HOLDINGS_URL = ("https://www.ishares.com/us/products/239714/ishares-russell-3000-etf/"
+                     "1467271812596.ajax?fileType=csv&fileName=IWV_holdings&dataType=fund")
+SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 OUT_DIR = Path(__file__).resolve().parent  # tutto alla radice del repo, niente sottocartelle
 WEIGHTS = {"value": 0.40, "quality": 0.40, "momentum": 0.20}
 MISSING_PENALTY = -0.75
@@ -48,16 +55,6 @@ def facts_of(cik):
 
 
 def durations(gaap, tags):
-    """Righe 'durata' per il primo tag della lista che ha un periodo ANNUALE
-    valido (330-400 giorni). PRIMA restituiva le righe del primo tag che
-    aveva QUALSIASI dato, anche solo pochi trimestri residui di una
-    vecchia tassonomia -- bug scoperto su T/BKNG: il loro primo tag in
-    lista aveva 3 righe trimestrali del 2018 e nient'altro, mentre il
-    secondo tag aveva 340 righe con un anno completo valido. Ora si
-    continua a cercare finche' non si trova un tag con un anno vero;
-    se nessuno ce l'ha, si usa comunque il primo che aveva dei dati
-    (fallback), invece di restituire il vuoto."""
-    fallback = None
     for t in tags:
         node = gaap.get(t)
         if not node:
@@ -71,13 +68,9 @@ def durations(gaap, tags):
                     a, b = d(r["start"]), d(r["end"])
                     if a and b:
                         rows.append({"end": r["end"], "val": r["val"], "days": (b - a).days})
-        if not rows:
-            continue
-        if any(330 <= r["days"] <= 400 for r in rows):
-            return rows  # tag buono: ha un anno valido, usalo subito
-        if fallback is None:
-            fallback = rows  # tienilo da parte, ma continua a cercare di meglio
-    return fallback if fallback is not None else []
+        if rows:
+            return rows
+    return []
 
 
 def instant(gaap, tags):
@@ -209,13 +202,53 @@ PRETAX = ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItems
           "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"]
 
 
+def fetch_iwv_holdings():
+    """Scarica le holding dell'ETF iShares Russell 3000 (IWV). FTSE Russell
+    non pubblica gratis la lista dei componenti dell'indice; le holding
+    dell'ETF che lo replica sono il modo standard (non ufficiale, ma
+    ampiamente usato da chi fa ricerca quant) per averle gratis. Il file ha
+    alcune righe di metadata (nome fondo, data, AUM) prima dell'header vero
+    -- lo cerco dinamicamente invece di contare le righe a mano, cosi' non
+    si rompe se iShares aggiunge/toglie una riga di metadata."""
+    resp = requests.get(IWV_HOLDINGS_URL, headers=BROWSER_UA, timeout=60)
+    resp.raise_for_status()
+    lines = resp.text.splitlines()
+    header_idx = next((i for i, l in enumerate(lines) if l.startswith("Ticker,")), None)
+    if header_idx is None:
+        raise RuntimeError("Non trovo la riga di header nel CSV di IWV -- iShares potrebbe "
+                            "aver cambiato formato del file. Controllare manualmente.")
+    df = pd.read_csv(io.StringIO("\n".join(lines[header_idx:])), thousands=",")
+    df.columns = [c.strip() for c in df.columns]
+    return df
+
+
 def build_universe():
-    sp = pd.read_csv(
-        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
-    )
-    sp.columns = [c.strip() for c in sp.columns]
-    sp = sp[~sp["GICS Sector"].isin(["Financials", "Real Estate"])].copy()
-    return [(r["Symbol"], str(int(r["CIK"])).zfill(10), r["GICS Sector"]) for _, r in sp.iterrows()]
+    log("Scarico le holding di IWV (iShares Russell 3000 ETF)...")
+    iwv = fetch_iwv_holdings()
+    iwv = iwv[iwv["Asset Class"] == "Equity"].copy()
+    iwv["Ticker"] = iwv["Ticker"].astype(str).str.strip().str.upper()
+    iwv = iwv[~iwv["Ticker"].isin(["--", "", "NAN"])]
+    iwv = iwv[~iwv["Sector"].isin(["Financials", "Real Estate", "Cash and/or Derivatives"])]
+    iwv = iwv.drop_duplicates(subset="Ticker")
+    log(f"  {len(iwv)} nomi equity ex-Financials/Real Estate nell'ETF")
+
+    log("Scarico la mappa ticker -> CIK da SEC...")
+    sec_map = requests.get(SEC_TICKERS_URL, headers=UA, timeout=60).json()
+    ticker_to_cik = {v["ticker"].upper(): str(v["cik_str"]).zfill(10) for v in sec_map.values()}
+
+    universe, unmatched = [], []
+    for _, r in iwv.iterrows():
+        cik = ticker_to_cik.get(r["Ticker"])
+        if cik:
+            universe.append((r["Ticker"], cik, r["Sector"]))
+        else:
+            unmatched.append(r["Ticker"])
+    if unmatched:
+        preview = ", ".join(unmatched[:15]) + (" ..." if len(unmatched) > 15 else "")
+        log(f"  >> ATTENZIONE: {len(unmatched)} ticker senza CIK SEC corrispondente, esclusi "
+            f"(spesso simboli multi-classe scritti diversamente tra iShares e SEC/Yahoo, "
+            f"es. BRKB vs BRK-B): {preview}")
+    return universe
 
 
 def fetch_fundamentals(universe):
@@ -263,7 +296,7 @@ def zscore_col(df, sec, cnt, col, sign=1):
 
 
 def main():
-    log("Costruisco l'universo S&P 500 ex-Financials/Real Estate...")
+    log("Costruisco l'universo Russell 3000 ex-Financials/Real Estate...")
     universe = build_universe()
     log(f"universo: {len(universe)} aziende")
 
@@ -309,30 +342,6 @@ def main():
     ranges = [range_52w(t) for t in df.index]
     df["high_52w"] = [r[0] for r in ranges]
     df["low_52w"] = [r[1] for r in ranges]
-
-    # Riserva finale per le azioni in circolazione: se entrambi i tag EDGAR
-    # (dei e us-gaap) mancano, capita soprattutto per aziende a classi
-    # azionarie multiple (es. META) dove l'API companyfacts non espone il
-    # valore combinato perche' e' riportato con una dimensione per classe
-    # nell'XBRL originale. yfinance non passa dall'XBRL e non eredita
-    # questo problema -- lo usiamo SOLO per i pochi nomi che falliscono
-    # entrambe le fonti EDGAR, non per tutti (sarebbe lento e inutile).
-    missing_shares = df[df["shares"].isna()].index.tolist()
-    if missing_shares:
-        log(f"Azioni in circolazione mancanti da EDGAR per {len(missing_shares)} aziende, provo yfinance: {missing_shares}")
-        for tk in missing_shares:
-            try:
-                t = yf.Ticker(tk.replace(".", "-"))
-                try:
-                    info = t.get_info()  # yfinance recenti
-                except AttributeError:
-                    info = t.info  # yfinance piu' vecchie
-                sh = info.get("sharesOutstanding")
-                if sh:
-                    df.loc[tk, "shares"] = sh
-                    log(f"  {tk}: recuperato da yfinance ({sh:,})")
-            except Exception as e:
-                log(f"  {tk}: fallback yfinance fallito ({e})")
 
     df["mktcap"] = df["price"] * df["shares"]
     df["ev"] = df["mktcap"] + df["debt"] - df["cash"]
@@ -405,7 +414,7 @@ def main():
     meta = {
         "generated_at": dt.datetime.utcnow().isoformat() + "Z",
         "n_names": int(len(out)),
-        "universe": "S&P 500 ex-Financials/Real Estate",
+        "universe": "Russell 3000 ex-Financials/Real Estate",
         "weights": WEIGHTS,
         "source": "SEC EDGAR (TTM point-in-time) + Yahoo Finance",
     }
