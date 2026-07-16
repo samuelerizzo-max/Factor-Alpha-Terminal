@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ticker:
-        description: 'Ticker da cercare (es. NVDA, AAPL, un nome fuori da Russell 3000...)'
+        description: 'Ticker da cercare, separati da virgola se più di uno (es. NVDA, AAPL, un nome fuori da Russell 3000...)'
         required: true
 
 permissions:
