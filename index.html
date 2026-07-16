@@ -359,6 +359,7 @@
       <button class="fa-tab fa-active" data-tab="screen">SCREEN</button>
       <button class="fa-tab" data-tab="model">MODEL</button>
       <button class="fa-tab" data-tab="predict">PREDICT</button>
+      <button class="fa-tab" data-tab="lookup">CERCA</button>
       <button class="fa-tab" data-tab="investment">INVESTMENT</button>
     </nav>
 
@@ -477,6 +478,29 @@
         indipendenti nel test (sotto ~10 — i giorni si sovrappongono, non sono davvero indipendenti),
         qualunque numero va preso con molta cautela. Trattalo come diagnostica di supporto, mai come
         segnale di trading.
+      </div>
+    </section>
+
+    <section class="fa-panel" id="fa-panel-lookup">
+      <div class="fa-callout" style="margin-bottom:16px;">
+        <div class="fa-callout-tag">Come lanciarlo</div>
+        Vai su GitHub → tab <b>Actions</b> → workflow <b>"Cerca ticker"</b> → <b>Run workflow</b> →
+        scrivi il ticker (es. <span class="mono">NVDA</span>) → <b>Run workflow</b>. Richiede pochi
+        secondi (scarica solo quel ticker, non l'intero universo). Poi torna qui e premi "Aggiorna".
+      </div>
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:16px;">
+        <button class="fa-upload-btn" id="fa-lookup-refresh" style="cursor:pointer">⟳ Aggiorna risultato</button>
+        <span class="mono" id="fa-lookup-meta" style="font-size:11px; color:var(--text-mute)"></span>
+      </div>
+      <div id="fa-lookup-result"></div>
+      <div class="fa-callout" style="margin-top:16px;">
+        <div class="fa-callout-tag">Cos'è, e cosa NON è</div>
+        Prende SOLO il ticker richiesto da EDGAR + Yahoo Finance e lo confronta con i peer del suo
+        settore già presenti nell'ultimo <span class="mono">ranking.csv</span> (fino a una settimana
+        di ritardo) — stessa identica formula di SCREEN, non un motore diverso. Se il ticker non è
+        nell'universo Russell 3000 corrente, il confronto usa le statistiche globali invece che quelle
+        di settore (meno preciso, sempre segnalato esplicitamente). Nessun trap_flag qui: leggi
+        F-Score e value_score insieme, a mano, come faresti con un nome nuovo in SCREEN.
       </div>
     </section>
 
@@ -1091,7 +1115,7 @@
         <div><div class="fa-metric-label">R²</div><div class="fa-metric-val" style="color:${passColor}">${r.r2}</div></div>
         <div><div class="fa-metric-label">R² baseline</div><div class="fa-metric-val" style="color:var(--text-dim)">${r.baseline_r2}</div></div>
         <div><div class="fa-metric-label">RMSE</div><div class="fa-metric-val">${r.rmse}</div></div>
-        <div><div class="fa-metric-label">Oss. indip. test</div><div class="fa-metric-val" style="color:${nColor}">~${r.effective_n_test}</div></div>
+        <div><div class="fa-metric-label">Fold walk-forward</div><div class="fa-metric-val" style="color:${nColor}">${r.effective_n_test}</div></div>
       </div>
       <div class="fa-sm-title" style="margin-top:14px;">Previsione vs reale (test set)</div>
       <div class="fa-predict-chart">${predictionChartSVG(r.series)}</div>
@@ -1129,6 +1153,77 @@
       console.warn("predictions.json non disponibile:", e.message);
     }
   }
+
+  // ---------- CERCA: punteggio on-demand per un singolo ticker ----------
+  function renderLookupResult(r){
+    const scoreColor = (r.SCORE||0) >= 0 ? 'var(--amber)' : 'var(--red)';
+    const uniColor = r.in_universe_russell3000 ? 'var(--green)' : 'var(--amber)';
+    const uniLabel = r.in_universe_russell3000
+      ? "Già nell'universo Russell 3000 — confronto contro i peer di settore"
+      : "NON nell'universo Russell 3000 — confronto contro le statistiche globali (meno preciso)";
+    const factors = [
+      {key:'value_score', label:'Value', color:'var(--cyan)'},
+      {key:'quality_score', label:'Quality', color:'var(--violet)'},
+      {key:'momentum_score', label:'Momentum', color:'var(--amber)'},
+    ];
+    const factorHtml = factors.map(f=>{
+      const v = r[f.key];
+      return `<div class="fa-factor-block">
+        <div class="fa-factor-label" style="color:${f.color}">
+          <span>${f.label}</span><span class="mono">${v!==undefined?(v>=0?'+':'')+v.toFixed(2):'—'}</span>
+        </div>
+        ${divergingBar(v, 3, f.color, 8)}
+      </div>`;
+    }).join("");
+
+    const rawLabels = {
+      earn_yield:"Earnings Yield (TTM)", fcf_yield:"FCF Yield", ebit_yield:"EBIT/EV Yield",
+      book_price:"Book/Price", roic:"ROIC", roe:"ROE", gross_margin:"Gross Margin",
+      op_margin:"Op. Margin", debt_eq:"Debt/Equity", mom:"Momentum 12-1",
+    };
+    const rawGrid = Object.entries(r.raw_metrics||{}).filter(([k,v])=>v!==null && v!==undefined).map(([k,v])=>{
+      const val = k !== 'debt_eq' ? ((v>=0?'+':'')+(v*100).toFixed(1)+'%') : (v.toFixed(2)+'x');
+      const basis = (r.z_score_basis||{})[k] || '';
+      return `<div class="fa-metric">
+        <div class="fa-metric-label">${rawLabels[k]||k}</div>
+        <div class="fa-metric-val">${val}</div>
+        <div style="font-size:9.5px; color:var(--text-mute)">${basis}</div>
+      </div>`;
+    }).join("");
+
+    return `<div class="fa-trow-wrap" style="padding:16px; border:1px solid var(--border-soft); border-radius:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
+        <span class="fa-ticker" style="font-size:20px;">${r.ticker}</span>
+        <span class="fa-score-num" style="font-size:20px; color:${scoreColor}">${r.SCORE!==undefined?r.SCORE.toFixed(3):'—'}</span>
+      </div>
+      <div class="fa-note" style="color:${uniColor}; margin-bottom:12px;">${uniLabel} — settore: ${r.sector}</div>
+      <div class="fa-detail-grid">${factorHtml}</div>
+      <div class="fa-note" style="margin:10px 0;">
+        Rank se inserito ora: <b>${r.rank_if_inserted}</b> / ${r.n_total_if_inserted}
+        &nbsp;·&nbsp; F-Score: <b>${r.fscore ?? '—'}</b>/9 (${r.fscore_n ?? 0} criteri disponibili)
+      </div>
+      <div class="fa-metrics-grid">${rawGrid}</div>
+      <div class="fa-note" style="font-size:11px; margin-top:10px;">${r.note||''}</div>
+    </div>`;
+  }
+
+  async function loadLookup(){
+    const box = document.getElementById('fa-lookup-result');
+    const metaEl = document.getElementById('fa-lookup-meta');
+    if (!box) return;
+    try {
+      const res = await fetch('lookup.json', {cache:'no-store'});
+      if (!res.ok) throw new Error('lookup.json non trovato');
+      const data = await res.json();
+      const gdt = new Date(data.generated_at);
+      metaEl.textContent = `Ultima ricerca: ${data.ticker} · ${gdt.toLocaleDateString('it-IT')} ${gdt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`;
+      box.innerHTML = renderLookupResult(data);
+    } catch(e){
+      box.innerHTML = `<div class="fa-note">Nessuna ricerca ancora disponibile. Lancia il workflow "Cerca ticker" da Actions (vedi istruzioni sopra), poi premi "Aggiorna risultato".</div>`;
+      console.warn("lookup.json non disponibile:", e.message);
+    }
+  }
+  document.getElementById('fa-lookup-refresh')?.addEventListener('click', loadLookup);
 
   // ---------- INVESTMENT: calcolatore di size, MAI un esecutore di ordini ----------
   let invCashMain = null;
@@ -1300,6 +1395,7 @@
   render();
   loadLiveData();
   loadPredictions();
+  loadLookup();
 })();
 </script>
 

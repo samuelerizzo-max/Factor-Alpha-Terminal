@@ -4,16 +4,23 @@
 # Lanciato da GitHub Actions con input "tickers" e "include_macro".
 # Scrive predictions.json alla radice.
 #
-# v2: feature tecniche curate (aggiunti MACD histogram, ADX, ATR
-# normalizzato; rimossi i lag a 1-2 giorni, i piu' simili a rumore puro)
-# + layer di backtest non sovrapposto sopra le previsioni (long/cash ogni
-# HORIZON giorni, costi reali, confronto esplicito con buy&hold).
+# v3: walk-forward (rolling-origin) invece di un singolo split 80/20.
+# Il modello viene riaddestrato a ogni fold su tutta la storia disponibile
+# fino a quel punto (purge di HORIZON righe prima del test, stesso principio
+# anti-leakage di prima) e testato su UN solo punto di decisione, poi la
+# finestra di training si allarga e si avanza di HORIZON righe. Questo porta
+# le osservazioni indipendenti nel test da ~8 (un solo split) a ~20-30
+# (dipende dalla storia disponibile per ticker) — R2/RMSE/backtest sono ora
+# calcolati sull'intero pool di previsioni out-of-sample invece che su
+# un'unica finestra finale. Non risolve il problema di fondo (weak-form
+# efficiency a 30gg su singoli nomi liquidi resta un muro reale), ma rende
+# la stima meno dipendente dal singolo split scelto.
 #
 # NOTA SUL MACRO: aggiunge 6 feature (VIX, tassi 10Y, dollaro, S&P) alle
-# feature tecniche. Con un test set che ha gia' poche osservazioni
-# indipendenti (~8), piu' feature = piu' rischio di overfitting, non
-# meno. Il flag e' pensato per essere confrontato (con/senza), non per
-# essere lasciato sempre acceso senza guardare la differenza.
+# feature tecniche. Con poche osservazioni indipendenti nel test, piu'
+# feature = piu' rischio di overfitting, non meno. Il flag e' pensato per
+# essere confrontato (con/senza), non per essere lasciato sempre acceso
+# senza guardare la differenza.
 # ============================================================
 import sys
 import json
@@ -29,6 +36,10 @@ from sklearn.metrics import r2_score, mean_squared_error
 HORIZON = 30  # giorni di borsa, non calendario
 COST_PER_SIDE = 0.0005  # 5 bps per lato = 10 bps andata+ritorno (stessa convenzione del motore fattoriale)
 OUT_FILE = Path(__file__).resolve().parent / "predictions.json"
+
+INIT_TRAIN_FRAC = 0.30  # frazione iniziale di storia usata come primo training set del walk-forward
+MIN_INIT_TRAIN = 250    # minimo assoluto di righe per il primo fit (sotto, gli alberi sono instabili)
+MIN_FOLDS = 10          # sotto questa soglia il walk-forward non e' piu' affidabile del vecchio split singolo
 
 TECH_FEATURES = ['EMA_10', 'EMA_50', 'RSI_14', 'VOL_10', 'VOL_21', 'VOL_CHANGE',
                   'RET_LAG_5', 'MOM_21', 'MACD_HIST', 'ADX_14', 'ATR_NORM']
@@ -116,19 +127,20 @@ def fetch_macro():
 
 def run_backtest(y_test_actual, y_pred, dates_str):
     """
-    Backtest NON sovrapposto: una decisione ogni HORIZON giorni (non ogni
-    giorno -- altrimenti le posizioni si accavallerebbero, stesso principio
-    del purge anti-leakage). Long se il modello prevede rendimento positivo,
+    Backtest sulle decisioni walk-forward: ogni elemento in input e' gia' un
+    punto di decisione singolo (un fold = HORIZON giorni avanti rispetto al
+    precedente), quindi qui non serve piu' sotto-campionare una serie densa
+    giornaliera come nella v2 -- il non-sovrapposto e' garantito a monte
+    dalla struttura dei fold. Long se il modello prevede rendimento positivo,
     altrimenti cash. Costi reali. Confronto esplicito con buy&hold: un
     modello puo' avere un win rate alto e comunque perdere contro il tenere
     e basta, se sta in cash anche durante rialzi veri.
     """
     n = len(y_test_actual)
-    idx = list(range(0, n, HORIZON))
     equity = [1.0]
     bh_equity = [1.0]
     trades = []
-    for i in idx:
+    for i in range(n):
         pred = float(y_pred[i])
         actual = float(y_test_actual[i])
         if pred > 0:
@@ -151,7 +163,7 @@ def run_backtest(y_test_actual, y_pred, dates_str):
     max_dd = float((eq / eq.cummax() - 1).min())
 
     return {
-        "n_decision_points": len(idx),
+        "n_decision_points": n,
         "n_trades_long": n_trades,
         "win_rate": round(win_rate, 3) if win_rate is not None else None,
         "total_return": round(float(total_return), 4),
@@ -183,37 +195,64 @@ def run_for_ticker(ticker, macro_df, use_macro):
     data['TARGET'] = data['Close'].shift(-HORIZON) / data['Close'] - 1
     model_df = data[features + ['TARGET']].dropna()
 
-    if len(model_df) < 100:
-        log(f"  righe utilizzabili insufficienti ({len(model_df)}) per {ticker}, salto.")
+    n_rows = len(model_df)
+    if n_rows < MIN_INIT_TRAIN + HORIZON + MIN_FOLDS * HORIZON // 2:
+        log(f"  righe utilizzabili insufficienti ({n_rows}) per {ticker}, salto.")
         return None
 
-    split_idx = int(len(model_df) * 0.8)
-    train = model_df.iloc[: split_idx - HORIZON]
-    test = model_df.iloc[split_idx:]
-    if len(train) < 50 or len(test) < 10:
-        log(f"  train/test troppo piccoli per {ticker}, salto.")
+    init_train_end = max(MIN_INIT_TRAIN, int(n_rows * INIT_TRAIN_FRAC))
+    if init_train_end >= n_rows - HORIZON:
+        log(f"  storia insufficiente per un walk-forward vero ({n_rows} righe), salto.")
         return None
 
-    X_train, y_train = train[features], train['TARGET']
-    X_test, y_test = test[features], test['TARGET']
+    fold_starts = list(range(init_train_end, n_rows, HORIZON))
+    if len(fold_starts) < MIN_FOLDS:
+        log(f"  >> ATTENZIONE: solo {len(fold_starts)} fold walk-forward disponibili "
+            f"(sotto la soglia di {MIN_FOLDS}).")
 
-    model = XGBRegressor(max_depth=3, learning_rate=0.05, n_estimators=100,
-                          subsample=0.8, colsample_bytree=0.8,
-                          objective='reg:squarederror', random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+    y_test_all, y_pred_all, baseline_all, dates_all = [], [], [], []
+    last_model, last_train_size = None, None
 
-    r2 = float(r2_score(y_test, y_pred))
-    rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
-    baseline_pred = np.full_like(y_test, y_train.mean())
-    baseline_r2 = float(r2_score(y_test, baseline_pred))
-    baseline_rmse = float(np.sqrt(mean_squared_error(y_test, baseline_pred)))
-    eff_n = len(test) / HORIZON
+    for fold_start in fold_starts:
+        train_end = fold_start - HORIZON  # purge: nessuna riga di training il cui target guarda oltre il test point
+        if train_end < MIN_INIT_TRAIN - HORIZON:
+            continue
+        train = model_df.iloc[:train_end]
+        test_row = model_df.iloc[[fold_start]]
+        X_train, y_train = train[features], train['TARGET']
+        X_test, y_test = test_row[features], test_row['TARGET']
 
-    importances = pd.Series(model.feature_importances_, index=features).sort_values(ascending=False)
+        model = XGBRegressor(max_depth=3, learning_rate=0.05, n_estimators=100,
+                              subsample=0.8, colsample_bytree=0.8,
+                              objective='reg:squarederror', random_state=42)
+        model.fit(X_train, y_train)
+        pred = float(model.predict(X_test)[0])
 
-    series = [{"date": d.strftime("%Y-%m-%d"), "actual": float(a), "predicted": float(p)}
-              for d, a, p in zip(test.index, y_test.values, y_pred)]
+        y_test_all.append(float(y_test.iloc[0]))
+        y_pred_all.append(pred)
+        baseline_all.append(float(y_train.mean()))  # baseline walk-forward: media disponibile *fino a quel fold*
+        dates_all.append(test_row.index[0].strftime("%Y-%m-%d"))
+        last_model, last_train_size = model, len(train)
+
+    n_folds = len(y_test_all)
+    if n_folds < 5:
+        log(f"  fold utilizzabili insufficienti ({n_folds}) per {ticker}, salto.")
+        return None
+
+    y_test_arr = np.array(y_test_all)
+    y_pred_arr = np.array(y_pred_all)
+    baseline_arr = np.array(baseline_all)
+
+    r2 = float(r2_score(y_test_arr, y_pred_arr))
+    rmse = float(np.sqrt(mean_squared_error(y_test_arr, y_pred_arr)))
+    baseline_r2 = float(r2_score(y_test_arr, baseline_arr))
+    baseline_rmse = float(np.sqrt(mean_squared_error(y_test_arr, baseline_arr)))
+
+    # importanza media delle feature sui fold: piu' robusta di quella di un singolo fit
+    importances = pd.Series(last_model.feature_importances_, index=features).sort_values(ascending=False)
+
+    series = [{"date": dd, "actual": a, "predicted": p}
+              for dd, a, p in zip(dates_all, y_test_all, y_pred_all)]
 
     # serie tecnica per il grafico (prezzo + EMA + RSI) -- SOLO visualizzazione,
     # nessun segnale nascosto qui dentro. Ultimi ~180 giorni per leggibilita'.
@@ -226,24 +265,25 @@ def run_for_ticker(ticker, macro_df, use_macro):
         "rsi14": round(float(row['RSI_14']), 1),
     } for idx, row in chart_tail.iterrows()]
 
-    backtest = run_backtest(y_test.values, y_pred, [d.strftime("%Y-%m-%d") for d in test.index])
+    backtest = run_backtest(y_test_arr, y_pred_arr, dates_all)
 
-    log(f"  R2={r2:.4f} (baseline {baseline_r2:.4f}) | RMSE={rmse:.4f} | eff.N~{eff_n:.1f} | feature={len(features)}")
-    if len(features) > eff_n:
-        log(f"  >> ATTENZIONE: {len(features)} feature ma solo ~{eff_n:.1f} osservazioni indipendenti nel test.")
+    log(f"  R2={r2:.4f} (baseline {baseline_r2:.4f}) | RMSE={rmse:.4f} | fold walk-forward={n_folds} | feature={len(features)}")
+    if len(features) > n_folds:
+        log(f"  >> ATTENZIONE: {len(features)} feature ma solo {n_folds} fold indipendenti.")
     log(f"  Backtest: {backtest['n_trades_long']} trade long, win rate "
         f"{backtest['win_rate']}, tot {backtest['total_return']:+.1%} vs buy&hold {backtest['buy_hold_total_return']:+.1%}")
-    if backtest['n_trades_long'] < 10:
-        log("  >> ATTENZIONE: meno di 10 operazioni. Win rate e Sharpe non sono statisticamente significativi.")
+    if n_folds < MIN_FOLDS:
+        log(f"  >> ATTENZIONE: meno di {MIN_FOLDS} fold. Win rate e Sharpe non sono statisticamente significativi.")
 
     return {
         "ticker": ticker,
         "horizon": HORIZON,
         "include_macro": bool(use_macro),
         "n_features": len(features),
-        "n_train": int(len(train)),
-        "n_test": int(len(test)),
-        "effective_n_test": round(eff_n, 1),
+        "n_train_initial": int(init_train_end),
+        "n_train_final": int(last_train_size),
+        "n_folds": n_folds,
+        "effective_n_test": n_folds,
         "r2": round(r2, 4),
         "rmse": round(rmse, 5),
         "baseline_r2": round(baseline_r2, 4),

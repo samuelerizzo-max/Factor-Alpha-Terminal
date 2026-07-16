@@ -31,6 +31,11 @@ SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 OUT_DIR = Path(__file__).resolve().parent  # tutto alla radice del repo, niente sottocartelle
 WEIGHTS = {"value": 0.40, "quality": 0.40, "momentum": 0.20}
 MISSING_PENALTY = -0.75
+# S&P 500 non ne aveva bisogno (tutti large cap per definizione); Russell 3000
+# arriva fino ai micro-cap, dove i nomi "piu' economici" sono spesso solo i
+# meno liquidi, non i piu' sottovalutati. $300M come pavimento -- alzalo a
+# $500M se vuoi allinearlo esattamente alla soglia che usi negli screen EQS.
+MIN_MKTCAP = 300_000_000
 
 
 def log(*a):
@@ -355,7 +360,9 @@ def main():
     df["gross_margin"] = df["gp"] / df["rev"]
     df["op_margin"] = df["opi"] / df["rev"]
     df["debt_eq"] = np.where(pos_eq, df["debt"] / df["eq"], np.nan)
-    df = df[(df["mktcap"] > 0) & (df["rev"].fillna(0) > 0)]
+    n_before_floor = len(df)
+    df = df[(df["mktcap"] >= MIN_MKTCAP) & (df["rev"].fillna(0) > 0)]
+    log(f"  soglia liquidita' (mktcap >= ${MIN_MKTCAP/1e6:.0f}M): {len(df)}/{n_before_floor} nomi restano")
 
     # sanity: cappa i ratio impossibili prima dello z-score
     df["op_margin"] = df["op_margin"].clip(-1.0, 1.0)
@@ -403,8 +410,8 @@ def main():
     df.loc[is_cheap & has_reliable_fscore & (df["fscore"] >= 7), "trap_flag"] = "BASSO"
 
     cols = ["rank", "sector", "SCORE", "value_score", "quality_score", "momentum_score",
-            "earn_yield", "fcf_yield", "ebit_yield", "roic", "roe", "op_margin",
-            "debt_eq", "mom", "price", "high_52w", "low_52w", "mktcap",
+            "earn_yield", "fcf_yield", "ebit_yield", "book_price", "roic", "roe", "op_margin",
+            "gross_margin", "debt_eq", "mom", "price", "high_52w", "low_52w", "mktcap",
             "fscore", "fscore_n", "trap_flag"]
     out = df[cols].round(4)
 
