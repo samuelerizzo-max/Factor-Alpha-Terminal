@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 # ============================================================
-# LOOKUP — punteggio on-demand per UN singolo ticker.
-# Lanciato da GitHub Actions con input "ticker" (workflow_dispatch),
-# stesso pattern di predict.yml. Scrive lookup.json alla radice.
+# LOOKUP — punteggio on-demand per uno o più ticker, separati da virgola
+# (stesso formato di predict.yml). Lanciato da GitHub Actions con input
+# "ticker" (workflow_dispatch). Scrive lookup.json alla radice.
 #
 # NON rifà il fetch dell'intero universo Russell 3000 (10+ minuti):
-# scarica SOLO il ticker richiesto da EDGAR + Yahoo Finance (pochi
-# secondi), poi lo z-scora contro i peer del suo settore già presenti
+# scarica SOLO i ticker richiesti da EDGAR + Yahoo Finance (pochi secondi
+# l'uno), poi li z-scora contro i peer del loro settore già presenti
 # nell'ultimo ranking.csv committato -- stessa identica metodologia di
 # build_ranking.py (stesso cap dei ratio, stesso quantile clip 2%/98%,
 # stessa soglia cnt>=6 per il fallback a statistiche globali). Il
 # risultato e' "che punteggio avrebbe avuto se fosse stato incluso
-# nell'ultimo run settimanale", non un nuovo run completo.
+# nell'ultimo run settimanale", non un nuovo run completo. Un ticker che
+# fallisce (CIK non trovato, EDGAR senza dati us-gaap, ecc.) non blocca
+# gli altri: finisce in "errors", il resto prosegue.
 #
 # LIMITI DA SAPERE:
-# - Se il ticker non e' gia' nell'universo Russell 3000 corrente, non ho
-#   un settore GICS-like affidabile da EDGAR/Yahoo -- lo score usa le
+# - Se un ticker non e' gia' nell'universo Russell 3000, non ho un
+#   settore GICS-like affidabile da EDGAR/Yahoo -- lo score usa le
 #   statistiche globali (tutti i settori insieme) invece di quelle del
 #   suo settore, marcato esplicitamente in output.
 # - ranking.csv puo' avere fino a una settimana di ritardo: i peer con
@@ -55,14 +57,6 @@ def log(*a):
     print(*a, flush=True)
 
 
-def cik_for_ticker(ticker):
-    sec_map = requests.get(SEC_TICKERS_URL, headers=UA, timeout=60).json()
-    for v in sec_map.values():
-        if v["ticker"].upper() == ticker.upper():
-            return str(v["cik_str"]).zfill(10)
-    return None
-
-
 def peer_stats(ranking, sector, col):
     """Replica zscore_col di build_ranking.py, ma sui soli peer di
     settore gia' presenti in ranking.csv: stesso quantile clip 2%/98%,
@@ -91,27 +85,18 @@ def zscore_one(raw_value, ranking, sector, col, sign=1):
     return float(np.clip(z * sign, -3, 3)), basis
 
 
-def main():
-    if len(sys.argv) < 2:
-        raise SystemExit("Uso: python lookup_ticker.py TICKER")
-    ticker = sys.argv[1].strip().upper()
-
-    if not RANKING_FILE.exists():
-        raise SystemExit("ranking.csv non trovato -- lancia prima il workflow 'Aggiorna ranking'.")
-    ranking = pd.read_csv(RANKING_FILE, index_col=0)
-
-    log(f"Cerco il CIK SEC per {ticker}...")
-    cik = cik_for_ticker(ticker)
+def lookup_one(ticker, ranking, ticker_to_cik):
+    cik = ticker_to_cik.get(ticker)
     if not cik:
-        raise SystemExit(f"Nessun CIK SEC trovato per {ticker}. Controlla lo ticker -- alcuni "
+        raise ValueError(f"Nessun CIK SEC trovato per {ticker}. Controlla lo ticker -- alcuni "
                           f"titoli multi-classe usano simboli diversi tra fonti (es. BRKB vs BRK-B).")
 
-    log(f"Scarico i fondamentali EDGAR per {ticker} (CIK {cik})...")
+    log(f"  fondamentali EDGAR (CIK {cik})...")
     facts = facts_of(cik)
     gaap = facts.get("us-gaap", {})
     dei_facts = facts.get("dei", {})
     if not gaap:
-        raise SystemExit(f"EDGAR non ha dati us-gaap per {ticker} -- probabilmente non e' un "
+        raise ValueError(f"EDGAR non ha dati us-gaap per {ticker} -- probabilmente non e' un "
                           f"filer SEC domestico (10-K/10-Q), es. un ADR che deposita 20-F.")
 
     rev, ni, opi, gp = ttm(gaap, REV), ttm(gaap, NI), ttm(gaap, OPI), ttm(gaap, GP)
@@ -129,7 +114,7 @@ def main():
     invested = (eq + debt - cash) if eq is not None else None
     fscore, fscore_n = compute_fscore(gaap)
 
-    log("Scarico prezzo/momentum da Yahoo Finance...")
+    log("  prezzo/momentum da Yahoo Finance...")
     yf_ticker = ticker.replace(".", "-")
     px = yf.download(yf_ticker, period="400d", progress=False, auto_adjust=True)["Close"]
     if isinstance(px, pd.DataFrame):
@@ -142,7 +127,7 @@ def main():
     low_52w = float(window.min()) if len(window) else None
 
     if price is None or not shares:
-        raise SystemExit(f"Prezzo o azioni in circolazione mancanti per {ticker} -- impossibile "
+        raise ValueError(f"Prezzo o azioni in circolazione mancanti per {ticker} -- impossibile "
                           f"calcolare la market cap, quindi nessuno score.")
 
     mktcap = price * shares
@@ -198,9 +183,8 @@ def main():
     rank_if_inserted = int((ranking["SCORE"] > score).sum()) + 1
     n_total = len(ranking) + 1
 
-    result = {
+    return {
         "ticker": ticker,
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
         "in_universe_russell3000": in_universe,
         "sector": sector or "sconosciuto (fallback globale)",
         "z_score_basis": bases,
@@ -219,13 +203,46 @@ def main():
                 "Nessun trap_flag: leggi fscore/fscore_n a mano insieme al value_score.",
     }
 
-    with open(OUT_DIR / "lookup.json", "w") as f:
-        json.dump(result, f, indent=2)
 
-    log(f"\n{ticker}: SCORE={score:.4f}  (value {value_score:+.2f} / quality {quality_score:+.2f} "
-        f"/ momentum {momentum_score:+.2f})  -- rank_if_inserted {rank_if_inserted}/{n_total}")
-    log(f"Settore usato per lo z-score: {sector or 'globale'}  |  in universo Russell 3000: {in_universe}")
-    log("Scritto lookup.json.")
+def main():
+    if len(sys.argv) < 2:
+        raise SystemExit("Uso: python lookup_ticker.py TICKER1,TICKER2,...")
+    requested = [t.strip().upper() for t in sys.argv[1].split(",") if t.strip()]
+    if not requested:
+        raise SystemExit("Nessun ticker valido nell'input.")
+
+    if not RANKING_FILE.exists():
+        raise SystemExit("ranking.csv non trovato -- lancia prima il workflow 'Aggiorna ranking'.")
+    ranking = pd.read_csv(RANKING_FILE, index_col=0)
+
+    log("Scarico la mappa ticker -> CIK da SEC (una volta sola per tutti i ticker richiesti)...")
+    sec_map = requests.get(SEC_TICKERS_URL, headers=UA, timeout=60).json()
+    ticker_to_cik = {v["ticker"].upper(): str(v["cik_str"]).zfill(10) for v in sec_map.values()}
+
+    results, errors = [], []
+    for ticker in requested:
+        log(f"\n--- {ticker} ---")
+        try:
+            r = lookup_one(ticker, ranking, ticker_to_cik)
+            results.append(r)
+            log(f"  SCORE={r['SCORE']:.4f}  (value {r['value_score']:+.2f} / quality {r['quality_score']:+.2f} "
+                f"/ momentum {r['momentum_score']:+.2f})  -- rank_if_inserted {r['rank_if_inserted']}/{r['n_total_if_inserted']}")
+        except Exception as e:
+            log(f"  >> ERRORE: {e}")
+            errors.append({"ticker": ticker, "error": str(e)})
+
+    payload = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "requested_tickers": requested,
+        "results": results,
+        "errors": errors,
+    }
+    with open(OUT_DIR / "lookup.json", "w") as f:
+        json.dump(payload, f, indent=2)
+
+    log(f"\nFatto: {len(results)}/{len(requested)} ticker trovati. Scritto lookup.json.")
+    if errors:
+        log("Ticker con errore: " + ", ".join(e["ticker"] for e in errors))
 
 
 if __name__ == "__main__":

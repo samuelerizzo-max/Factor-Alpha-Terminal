@@ -485,8 +485,9 @@
       <div class="fa-callout" style="margin-bottom:16px;">
         <div class="fa-callout-tag">Come lanciarlo</div>
         Vai su GitHub → tab <b>Actions</b> → workflow <b>"Cerca ticker"</b> → <b>Run workflow</b> →
-        scrivi il ticker (es. <span class="mono">NVDA</span>) → <b>Run workflow</b>. Richiede pochi
-        secondi (scarica solo quel ticker, non l'intero universo). Poi torna qui e premi "Aggiorna".
+        scrivi uno o più ticker separati da virgola (es. <span class="mono">NVDA, ORCL, PLTR</span>) →
+        <b>Run workflow</b>. Richiede pochi secondi per ticker (scarica solo quelli richiesti, non
+        l'intero universo). Poi torna qui e premi "Aggiorna".
       </div>
       <div style="display:flex; gap:10px; align-items:center; margin-bottom:16px;">
         <button class="fa-upload-btn" id="fa-lookup-refresh" style="cursor:pointer">⟳ Aggiorna risultato</button>
@@ -1191,7 +1192,7 @@
       </div>`;
     }).join("");
 
-    return `<div class="fa-trow-wrap" style="padding:16px; border:1px solid var(--border-soft); border-radius:8px;">
+    return `<div class="fa-trow-wrap" style="padding:16px; border:1px solid var(--border-soft); border-radius:8px; margin-bottom:12px;">
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
         <span class="fa-ticker" style="font-size:20px;">${r.ticker}</span>
         <span class="fa-score-num" style="font-size:20px; color:${scoreColor}">${r.SCORE!==undefined?r.SCORE.toFixed(3):'—'}</span>
@@ -1216,8 +1217,14 @@
       if (!res.ok) throw new Error('lookup.json non trovato');
       const data = await res.json();
       const gdt = new Date(data.generated_at);
-      metaEl.textContent = `Ultima ricerca: ${data.ticker} · ${gdt.toLocaleDateString('it-IT')} ${gdt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`;
-      box.innerHTML = renderLookupResult(data);
+      metaEl.textContent = `Ultima ricerca: ${(data.requested_tickers||[]).join(', ')} · `
+        + `${gdt.toLocaleDateString('it-IT')} ${gdt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})}`;
+      const cards = (data.results||[]).map(renderLookupResult).join('');
+      const errBlock = (data.errors||[]).length
+        ? `<div class="fa-note" style="color:var(--red); margin-top:10px;">Non trovati: `
+          + data.errors.map(e=>`<b>${e.ticker}</b> (${e.error})`).join(' · ') + `</div>`
+        : '';
+      box.innerHTML = (cards || `<div class="fa-note">Nessun ticker trovato in questa ricerca.</div>`) + errBlock;
     } catch(e){
       box.innerHTML = `<div class="fa-note">Nessuna ricerca ancora disponibile. Lancia il workflow "Cerca ticker" da Actions (vedi istruzioni sopra), poi premi "Aggiorna risultato".</div>`;
       console.warn("lookup.json non disponibile:", e.message);
