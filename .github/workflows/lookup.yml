@@ -1,0 +1,35 @@
+name: Cerca ticker
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: 'Ticker da cercare (es. NVDA, AAPL, un nome fuori da Russell 3000...)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Cerca il ticker (EDGAR + Yahoo Finance, contro l'ultimo ranking.csv)
+        run: python lookup_ticker.py "${{ github.event.inputs.ticker }}"
+
+      - name: Commit e push del risultato
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Lookup ticker: ${{ github.event.inputs.ticker }}"
+          file_pattern: 'lookup.json'
