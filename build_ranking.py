@@ -60,6 +60,16 @@ def facts_of(cik):
 
 
 def durations(gaap, tags):
+    """Righe 'durata' per il primo tag della lista che ha un periodo ANNUALE
+    valido (330-400 giorni). PRIMA restituiva le righe del primo tag che
+    aveva QUALSIASI dato, anche solo pochi trimestri residui di una
+    vecchia tassonomia -- bug scoperto su T/BKNG: il loro primo tag in
+    lista aveva 3 righe trimestrali del 2018 e nient'altro, mentre il
+    secondo tag aveva 340 righe con un anno completo valido. Ora si
+    continua a cercare finche' non si trova un tag con un anno vero;
+    se nessuno ce l'ha, si usa comunque il primo che aveva dei dati
+    (fallback), invece di restituire il vuoto."""
+    fallback = None
     for t in tags:
         node = gaap.get(t)
         if not node:
@@ -73,9 +83,13 @@ def durations(gaap, tags):
                     a, b = d(r["start"]), d(r["end"])
                     if a and b:
                         rows.append({"end": r["end"], "val": r["val"], "days": (b - a).days})
-        if rows:
-            return rows
-    return []
+        if not rows:
+            continue
+        if any(330 <= r["days"] <= 400 for r in rows):
+            return rows  # tag buono: ha un anno valido, usalo subito
+        if fallback is None:
+            fallback = rows  # tienilo da parte, ma continua a cercare di meglio
+    return fallback if fallback is not None else []
 
 
 def instant(gaap, tags):
@@ -214,14 +228,32 @@ def fetch_iwv_holdings():
     ampiamente usato da chi fa ricerca quant) per averle gratis. Il file ha
     alcune righe di metadata (nome fondo, data, AUM) prima dell'header vero
     -- lo cerco dinamicamente invece di contare le righe a mano, cosi' non
-    si rompe se iShares aggiunge/toglie una riga di metadata."""
+    si rompe se iShares aggiunge/toglie una riga di metadata.
+
+    v2: ricerca dell'header piu' robusta (case-insensitive, tollera
+    virgolette/spazi) invece di un confronto esatto su "Ticker,". Se
+    fallisce comunque, stampa le prime righe grezze della risposta per
+    poter diagnosticare un vero cambio di formato invece di un semplice
+    errore muto."""
     resp = requests.get(IWV_HOLDINGS_URL, headers=BROWSER_UA, timeout=60)
     resp.raise_for_status()
     lines = resp.text.splitlines()
-    header_idx = next((i for i, l in enumerate(lines) if l.startswith("Ticker,")), None)
+
+    header_idx = None
+    for i, l in enumerate(lines):
+        cells = [c.strip().strip('"') for c in l.split(",")]
+        if cells and cells[0].strip().lower() == "ticker":
+            header_idx = i
+            break
+
     if header_idx is None:
-        raise RuntimeError("Non trovo la riga di header nel CSV di IWV -- iShares potrebbe "
-                            "aver cambiato formato del file. Controllare manualmente.")
+        log("  >> Header 'Ticker' non trovato. Prime 15 righe grezze della risposta iShares:")
+        for l in lines[:15]:
+            log(f"     {l[:200]}")
+        raise RuntimeError("Non trovo la riga di header nel CSV di IWV -- iShares ha "
+                            "probabilmente cambiato formato del file. Vedi le righe grezze "
+                            "sopra nel log per capire cosa e' cambiato.")
+
     df = pd.read_csv(io.StringIO("\n".join(lines[header_idx:])), thousands=",")
     df.columns = [c.strip() for c in df.columns]
     return df
@@ -347,6 +379,31 @@ def main():
     ranges = [range_52w(t) for t in df.index]
     df["high_52w"] = [r[0] for r in ranges]
     df["low_52w"] = [r[1] for r in ranges]
+
+    # Riserva finale per le azioni in circolazione: se entrambi i tag EDGAR
+    # (dei e us-gaap) mancano, capita soprattutto per aziende a classi
+    # azionarie multiple (es. META) dove l'API companyfacts non espone il
+    # valore combinato perche' e' riportato con una dimensione per classe
+    # nell'XBRL originale. yfinance non passa dall'XBRL e non eredita
+    # questo problema -- lo usiamo SOLO per i pochi nomi che falliscono
+    # entrambe le fonti EDGAR, non per tutti (sarebbe lento e inutile).
+    missing_shares = df[df["shares"].isna()].index.tolist()
+    if missing_shares:
+        log(f"Azioni in circolazione mancanti da EDGAR per {len(missing_shares)} aziende, provo yfinance: {missing_shares[:20]}{'...' if len(missing_shares)>20 else ''}")
+        for tk in missing_shares:
+            try:
+                t = yf.Ticker(tk.replace(".", "-"))
+                try:
+                    info = t.get_info()  # yfinance recenti
+                except AttributeError:
+                    info = t.info  # yfinance piu' vecchie
+                sh = info.get("sharesOutstanding")
+                if sh:
+                    df.loc[tk, "shares"] = sh
+            except Exception:
+                pass
+        recovered = len(missing_shares) - df.loc[missing_shares, "shares"].isna().sum()
+        log(f"  recuperate da yfinance: {recovered}/{len(missing_shares)}")
 
     df["mktcap"] = df["price"] * df["shares"]
     df["ev"] = df["mktcap"] + df["debt"] - df["cash"]
