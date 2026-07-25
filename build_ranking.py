@@ -11,7 +11,6 @@
 # ============================================================
 import json
 import time
-import io
 import datetime as dt
 from pathlib import Path
 
@@ -22,20 +21,10 @@ import yfinance as yf
 
 # Personalizza con un contatto vero: la SEC lo richiede per l'accesso equo a EDGAR.
 UA = {"User-Agent": "factor-alpha-terminal contact@example.com"}
-# iShares blocca gli User-Agent non-browser su alcuni endpoint; qui serve uno vero.
-BROWSER_UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
-IWV_HOLDINGS_URL = ("https://www.ishares.com/us/products/239714/ishares-russell-3000-etf/"
-                     "1467271812596.ajax?fileType=csv&fileName=IWV_holdings&dataType=fund")
-SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
 OUT_DIR = Path(__file__).resolve().parent  # tutto alla radice del repo, niente sottocartelle
 WEIGHTS = {"value": 0.40, "quality": 0.40, "momentum": 0.20}
 MISSING_PENALTY = -0.75
-# S&P 500 non ne aveva bisogno (tutti large cap per definizione); Russell 3000
-# arriva fino ai micro-cap, dove i nomi "piu' economici" sono spesso solo i
-# meno liquidi, non i piu' sottovalutati. $300M come pavimento -- alzalo a
-# $500M se vuoi allinearlo esattamente alla soglia che usi negli screen EQS.
-MIN_MKTCAP = 300_000_000
 
 
 def log(*a):
@@ -221,70 +210,13 @@ PRETAX = ["IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItems
           "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments"]
 
 
-def fetch_iwv_holdings():
-    """Scarica le holding dell'ETF iShares Russell 3000 (IWV). FTSE Russell
-    non pubblica gratis la lista dei componenti dell'indice; le holding
-    dell'ETF che lo replica sono il modo standard (non ufficiale, ma
-    ampiamente usato da chi fa ricerca quant) per averle gratis. Il file ha
-    alcune righe di metadata (nome fondo, data, AUM) prima dell'header vero
-    -- lo cerco dinamicamente invece di contare le righe a mano, cosi' non
-    si rompe se iShares aggiunge/toglie una riga di metadata.
-
-    v2: ricerca dell'header piu' robusta (case-insensitive, tollera
-    virgolette/spazi) invece di un confronto esatto su "Ticker,". Se
-    fallisce comunque, stampa le prime righe grezze della risposta per
-    poter diagnosticare un vero cambio di formato invece di un semplice
-    errore muto."""
-    resp = requests.get(IWV_HOLDINGS_URL, headers=BROWSER_UA, timeout=60)
-    resp.raise_for_status()
-    lines = resp.text.splitlines()
-
-    header_idx = None
-    for i, l in enumerate(lines):
-        cells = [c.strip().strip('"') for c in l.split(",")]
-        if cells and cells[0].strip().lower() == "ticker":
-            header_idx = i
-            break
-
-    if header_idx is None:
-        log("  >> Header 'Ticker' non trovato. Prime 15 righe grezze della risposta iShares:")
-        for l in lines[:15]:
-            log(f"     {l[:200]}")
-        raise RuntimeError("Non trovo la riga di header nel CSV di IWV -- iShares ha "
-                            "probabilmente cambiato formato del file. Vedi le righe grezze "
-                            "sopra nel log per capire cosa e' cambiato.")
-
-    df = pd.read_csv(io.StringIO("\n".join(lines[header_idx:])), thousands=",")
-    df.columns = [c.strip() for c in df.columns]
-    return df
-
-
 def build_universe():
-    log("Scarico le holding di IWV (iShares Russell 3000 ETF)...")
-    iwv = fetch_iwv_holdings()
-    iwv = iwv[iwv["Asset Class"] == "Equity"].copy()
-    iwv["Ticker"] = iwv["Ticker"].astype(str).str.strip().str.upper()
-    iwv = iwv[~iwv["Ticker"].isin(["--", "", "NAN"])]
-    iwv = iwv[~iwv["Sector"].isin(["Financials", "Real Estate", "Cash and/or Derivatives"])]
-    iwv = iwv.drop_duplicates(subset="Ticker")
-    log(f"  {len(iwv)} nomi equity ex-Financials/Real Estate nell'ETF")
-
-    log("Scarico la mappa ticker -> CIK da SEC...")
-    sec_map = requests.get(SEC_TICKERS_URL, headers=UA, timeout=60).json()
-    ticker_to_cik = {v["ticker"].upper(): str(v["cik_str"]).zfill(10) for v in sec_map.values()}
-
-    universe, unmatched = [], []
-    for _, r in iwv.iterrows():
-        cik = ticker_to_cik.get(r["Ticker"])
-        if cik:
-            universe.append((r["Ticker"], cik, r["Sector"]))
-        else:
-            unmatched.append(r["Ticker"])
-    if unmatched:
-        preview = ", ".join(unmatched[:15]) + (" ..." if len(unmatched) > 15 else "")
-        log(f"  >> ATTENZIONE: {len(unmatched)} ticker senza CIK SEC corrispondente, esclusi "
-            f"(spesso simboli multi-classe scritti diversamente tra iShares e SEC/Yahoo, "
-            f"es. BRKB vs BRK-B): {preview}")
+    log("Scarico l'elenco S&P 500 (fonte GitHub, stabile in tutto il progetto)...")
+    sp = pd.read_csv(SP500_URL)
+    sp.columns = [c.strip() for c in sp.columns]
+    sp = sp[~sp["GICS Sector"].isin(["Financials", "Real Estate"])].copy()
+    universe = [(r["Symbol"], str(int(r["CIK"])).zfill(10), r["GICS Sector"]) for _, r in sp.iterrows()]
+    log(f"  {len(universe)} aziende ex-Financials/Real Estate")
     return universe
 
 
@@ -333,7 +265,7 @@ def zscore_col(df, sec, cnt, col, sign=1):
 
 
 def main():
-    log("Costruisco l'universo Russell 3000 ex-Financials/Real Estate...")
+    log("Costruisco l'universo S&P 500 ex-Financials/Real Estate...")
     universe = build_universe()
     log(f"universo: {len(universe)} aziende")
 
@@ -418,8 +350,8 @@ def main():
     df["op_margin"] = df["opi"] / df["rev"]
     df["debt_eq"] = np.where(pos_eq, df["debt"] / df["eq"], np.nan)
     n_before_floor = len(df)
-    df = df[(df["mktcap"] >= MIN_MKTCAP) & (df["rev"].fillna(0) > 0)]
-    log(f"  soglia liquidita' (mktcap >= ${MIN_MKTCAP/1e6:.0f}M): {len(df)}/{n_before_floor} nomi restano")
+    df = df[(df["mktcap"] > 0) & (df["rev"].fillna(0) > 0)]
+    log(f"  {len(df)}/{n_before_floor} nomi restano dopo il filtro market cap/ricavi positivi")
 
     # sanity: cappa i ratio impossibili prima dello z-score
     df["op_margin"] = df["op_margin"].clip(-1.0, 1.0)
@@ -478,7 +410,7 @@ def main():
     meta = {
         "generated_at": dt.datetime.utcnow().isoformat() + "Z",
         "n_names": int(len(out)),
-        "universe": "Russell 3000 ex-Financials/Real Estate",
+        "universe": "S&P 500 ex-Financials/Real Estate",
         "weights": WEIGHTS,
         "source": "SEC EDGAR (TTM point-in-time) + Yahoo Finance",
     }
