@@ -1,0 +1,40 @@
+name: Aggiorna ranking
+
+on:
+  schedule:
+    # Ogni giorno alle 02:00 UTC (06:00 a Dubai)
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}   # bottone "Run workflow" per lanciarlo a mano quando vuoi
+
+permissions:
+  contents: write   # serve per fare il commit automatico dei dati aggiornati
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa le dipendenze
+        run: pip install -r requirements.txt
+
+      - name: Costruisci il ranking (EDGAR + Yahoo Finance)
+        run: python build_ranking.py
+
+      - name: Invia email con la Top 20
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python send_top20_email.py
+        continue-on-error: true   # un problema email non deve bloccare il commit del ranking
+
+      - name: Commit e push dei dati aggiornati
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Aggiornamento automatico ranking"
+          file_pattern: 'ranking.csv meta.json'
